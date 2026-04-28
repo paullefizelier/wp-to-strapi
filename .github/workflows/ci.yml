@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build core
+        run: npm run -w @wp-to-strapi/core build
+      - name: Typecheck core
+        run: npm run -w @wp-to-strapi/core typecheck
+      - name: Build strapi-adapter
+        run: npm run -w @wp-to-strapi/strapi-adapter build
+      - name: Typecheck strapi-adapter
+        run: npm run -w @wp-to-strapi/strapi-adapter typecheck
+      - name: Typecheck CLI
+        run: npm run -w @wp-to-strapi/cli typecheck

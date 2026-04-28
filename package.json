@@ -1,0 +1,26 @@
+{
+  "name": "wp-to-strapi",
+  "version": "0.0.0",
+  "description": "Migrate WordPress → Strapi v5 — core library, CLI, Nuxt UI, and Strapi plugin",
+  "license": "MIT",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-core build && npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-adapter build && npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-cli build",
+    "typecheck": "npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-core typecheck && npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-adapter typecheck && npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-cli typecheck",
+    "dev:web": "npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-web dev",
+    "build:plugin": "npm run -w strapi-plugin-wp-import build",
+    "cli": "npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-cli dev --",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "npm run build && changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "^0.5.0",
+    "@changesets/cli": "^2.27.0"
+  },
+  "engines": { "node": ">=20" }
+}

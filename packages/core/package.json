@@ -1,0 +1,45 @@
+{
+  "name": "@YOUR-NPM-USERNAME/wp-to-strapi-core",
+  "version": "0.1.0",
+  "description": "WordPress → Strapi v5 migration core (clients, orchestrator, events)",
+  "license": "MIT",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOUR-NPM-USERNAME/wp-to-strapi.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/YOUR-NPM-USERNAME/wp-to-strapi/issues"
+  },
+  "homepage": "https://github.com/YOUR-NPM-USERNAME/wp-to-strapi/tree/main/packages/core#readme",
+  "keywords": ["wordpress", "strapi", "migration", "typescript"],
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "p-limit": "^5.0.0",
+    "undici": "^6.19.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": { "node": ">=20" }
+}

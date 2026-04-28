@@ -1,0 +1,44 @@
+{
+  "name": "@YOUR-NPM-USERNAME/wp-to-strapi-cli",
+  "version": "0.1.0",
+  "description": "CLI front-end for the WordPress → Strapi migrator",
+  "license": "MIT",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOUR-NPM-USERNAME/wp-to-strapi.git",
+    "directory": "apps/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/YOUR-NPM-USERNAME/wp-to-strapi/issues"
+  },
+  "homepage": "https://github.com/YOUR-NPM-USERNAME/wp-to-strapi/tree/main/apps/cli#readme",
+  "keywords": ["wordpress", "strapi", "migration", "cli"],
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "wp-to-strapi": "dist/cli.js"
+  },
+  "files": ["dist", "README.md", "LICENSE", ".env.example"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node --enable-source-maps dist/cli.js",
+    "dev": "tsx src/cli.ts",
+    "migrate": "tsx src/cli.ts migrate",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@YOUR-NPM-USERNAME/wp-to-strapi-core": "^0.1.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": { "node": ">=20" }
+}

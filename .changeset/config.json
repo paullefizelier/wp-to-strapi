@@ -1,0 +1,23 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config@3.0.0/schema.json",
+  "changelog": [
+    "@changesets/changelog-github",
+    { "repo": "YOUR-NPM-USERNAME/wp-to-strapi" }
+  ],
+  "commit": false,
+  "fixed": [],
+  "linked": [
+    [
+      "@YOUR-NPM-USERNAME/wp-to-strapi-core",
+      "@YOUR-NPM-USERNAME/wp-to-strapi-adapter",
+      "strapi-plugin-wp-import"
+    ]
+  ],
+  "access": "public",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "ignore": ["@YOUR-NPM-USERNAME/wp-to-strapi-web"],
+  "___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH": {
+    "onlyUpdatePeerDependentsWhenOutOfRange": true
+  }
+}

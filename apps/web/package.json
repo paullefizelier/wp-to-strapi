@@ -1,0 +1,29 @@
+{
+  "name": "@YOUR-NPM-USERNAME/wp-to-strapi-web",
+  "version": "0.1.0",
+  "description": "Nuxt 3 UI for the WordPress → Strapi migrator",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare",
+    "typecheck": "nuxt typecheck"
+  },
+  "dependencies": {
+    "@nuxt/ui": "^2.18.0",
+    "@YOUR-NPM-USERNAME/wp-to-strapi-core": "^0.1.0",
+    "nuxt": "^3.13.0",
+    "vue": "^3.4.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0",
+    "vue-tsc": "^2.0.0"
+  },
+  "engines": { "node": ">=20" }
+}

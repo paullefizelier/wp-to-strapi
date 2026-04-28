@@ -1,0 +1,23 @@
+{
+  "plugin.name": "WP Import",
+  "plugin.description": "Import posts, pages and media from a WordPress site",
+  "page.title": "WordPress Import",
+  "page.subtitle": "Configure your WordPress source and run the migration into Strapi.",
+  "settings.wp.title": "WordPress source",
+  "settings.wp.baseUrl": "WordPress site URL",
+  "settings.wp.username": "Username (optional)",
+  "settings.wp.appPassword": "Application password",
+  "settings.strapi.title": "Strapi destination",
+  "settings.strapi.postUid": "Posts UID",
+  "settings.strapi.pageUid": "Pages UID",
+  "settings.options.title": "Options",
+  "settings.options.concurrency": "Concurrency",
+  "settings.options.pageSize": "WP page size",
+  "actions.save": "Save settings",
+  "actions.testConnection": "Test connection",
+  "actions.start": "Start migration",
+  "status.running": "Running",
+  "status.completed": "Completed",
+  "status.failed": "Failed",
+  "status.idle": "No migration in progress"
+}
