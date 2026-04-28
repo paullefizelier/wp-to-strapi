@@ -1,5 +1,5 @@
 import type { Core } from "@strapi/strapi";
-import type { Kind } from "@YOUR-NPM-USERNAME/wp-to-strapi-core";
+import type { Kind } from "@paullefizelier/wp-to-strapi-core";
 import type { Run } from "../services/run-store";
 
 export default ({ strapi }: { strapi: Core.Strapi }) => {

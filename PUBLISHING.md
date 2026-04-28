@@ -4,27 +4,27 @@ Three packages ship to npm, linked together via [Changesets](https://github.com/
 
 | Package                                        | npm name                                        | Audience                              |
 | ---------------------------------------------- | ----------------------------------------------- | ------------------------------------- |
-| `packages/core`                                | `@YOUR-NPM-USERNAME/wp-to-strapi-core`          | Anyone building on the engine         |
-| `packages/strapi-adapter`                      | `@YOUR-NPM-USERNAME/wp-to-strapi-adapter`       | Strapi plugin authors (peer on v5)    |
+| `packages/core`                                | `@paullefizelier/wp-to-strapi-core`          | Anyone building on the engine         |
+| `packages/strapi-adapter`                      | `@paullefizelier/wp-to-strapi-adapter`       | Strapi plugin authors (peer on v5)    |
 | `apps/strapi-plugin`                           | `strapi-plugin-wp-import` *(unscoped)*          | Strapi users — install from marketplace |
 
-The CLI (`@YOUR-NPM-USERNAME/wp-to-strapi-cli`) is publishable too but opt-in — drop the `private: true` when you want it on npm. The Nuxt app (`@YOUR-NPM-USERNAME/wp-to-strapi-web`) stays `private: true` forever; it's deployed, not distributed.
+The CLI (`@paullefizelier/wp-to-strapi-cli`) is publishable too but opt-in — drop the `private: true` when you want it on npm. The Nuxt app (`@paullefizelier/wp-to-strapi-web`) stays `private: true` forever; it's deployed, not distributed.
 
 ## One-time setup
 
 ### 1. Replace the scope placeholder
 
-Every `@YOUR-NPM-USERNAME/...` reference needs your real npm username (or org). One command does it all:
+Every `@paullefizelier/...` reference needs your real npm username (or org). One command does it all:
 
 ```bash
 # macOS
-grep -rl 'YOUR-NPM-USERNAME' . --exclude-dir=node_modules --exclude-dir=.git | xargs sed -i '' 's/YOUR-NPM-USERNAME/your-actual-username/g'
+grep -rl 'paullefizelier' . --exclude-dir=node_modules --exclude-dir=.git | xargs sed -i '' 's/paullefizelier/your-actual-username/g'
 
 # Linux
-grep -rl 'YOUR-NPM-USERNAME' . --exclude-dir=node_modules --exclude-dir=.git | xargs sed -i 's/YOUR-NPM-USERNAME/your-actual-username/g'
+grep -rl 'paullefizelier' . --exclude-dir=node_modules --exclude-dir=.git | xargs sed -i 's/paullefizelier/your-actual-username/g'
 ```
 
-Verify nothing slipped through: `grep -r YOUR-NPM-USERNAME . --exclude-dir=node_modules --exclude-dir=.git` should return nothing.
+Verify nothing slipped through: `grep -r paullefizelier . --exclude-dir=node_modules --exclude-dir=.git` should return nothing.
 
 ### 2. Reserve the npm name
 
@@ -68,8 +68,8 @@ npm run build                    # builds core + adapter + cli
 cd apps/strapi-plugin && npm run build && cd ../..   # builds the plugin
 
 # Publish in dependency order:
-npm publish -w @YOUR-NPM-USERNAME/wp-to-strapi-core
-npm publish -w @YOUR-NPM-USERNAME/wp-to-strapi-adapter
+npm publish -w @paullefizelier/wp-to-strapi-core
+npm publish -w @paullefizelier/wp-to-strapi-adapter
 npm publish -w strapi-plugin-wp-import
 ```
 

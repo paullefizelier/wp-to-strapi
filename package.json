@@ -9,11 +9,11 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-core build && npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-adapter build && npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-cli build",
-    "typecheck": "npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-core typecheck && npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-adapter typecheck && npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-cli typecheck",
-    "dev:web": "npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-web dev",
+    "build": "npm run -w @paullefizelier/wp-to-strapi-core build && npm run -w @paullefizelier/wp-to-strapi-adapter build && npm run -w @paullefizelier/wp-to-strapi-cli build",
+    "typecheck": "npm run -w @paullefizelier/wp-to-strapi-core typecheck && npm run -w @paullefizelier/wp-to-strapi-adapter typecheck && npm run -w @paullefizelier/wp-to-strapi-cli typecheck",
+    "dev:web": "npm run -w @paullefizelier/wp-to-strapi-web dev",
     "build:plugin": "npm run -w strapi-plugin-wp-import build",
-    "cli": "npm run -w @YOUR-NPM-USERNAME/wp-to-strapi-cli dev --",
+    "cli": "npm run -w @paullefizelier/wp-to-strapi-cli dev --",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "npm run build && changeset publish"

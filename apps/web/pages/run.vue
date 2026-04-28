@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { MigratorEvent, Kind } from "@YOUR-NPM-USERNAME/wp-to-strapi-core";
+import type { MigratorEvent, Kind } from "@paullefizelier/wp-to-strapi-core";
 
 definePageMeta({ title: "Migration en cours" });
 

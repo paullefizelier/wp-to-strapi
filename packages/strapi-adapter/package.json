@@ -1,18 +1,18 @@
 {
-  "name": "@YOUR-NPM-USERNAME/wp-to-strapi-adapter",
+  "name": "@paullefizelier/wp-to-strapi-adapter",
   "version": "0.1.0",
   "description": "Native Strapi adapter — implements StrapiAdapter via strapi.documents() + the upload service",
   "license": "MIT",
   "author": "",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/YOUR-NPM-USERNAME/wp-to-strapi.git",
+    "url": "git+https://github.com/paullefizelier/wp-to-strapi.git",
     "directory": "packages/strapi-adapter"
   },
   "bugs": {
-    "url": "https://github.com/YOUR-NPM-USERNAME/wp-to-strapi/issues"
+    "url": "https://github.com/paullefizelier/wp-to-strapi/issues"
   },
-  "homepage": "https://github.com/YOUR-NPM-USERNAME/wp-to-strapi/tree/main/packages/strapi-adapter#readme",
+  "homepage": "https://github.com/paullefizelier/wp-to-strapi/tree/main/packages/strapi-adapter#readme",
   "keywords": ["strapi", "adapter", "wordpress", "migration"],
   "type": "module",
   "main": "dist/index.js",
@@ -37,7 +37,7 @@
     "@strapi/strapi": "^5.0.0"
   },
   "dependencies": {
-    "@YOUR-NPM-USERNAME/wp-to-strapi-core": "^0.1.0"
+    "@paullefizelier/wp-to-strapi-core": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

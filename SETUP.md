@@ -11,28 +11,28 @@ End-to-end walkthrough from a fresh clone to a fully working dev environment, re
 
 ## 1. Remplacer le placeholder de scope (à faire **avant** d'installer)
 
-Le repo utilise `YOUR-NPM-USERNAME` partout comme sentinelle. Tant qu'il n'est pas remplacé, `pnpm install` ne sait pas que `@YOUR-NPM-USERNAME/wp-to-strapi-core` vit dans `packages/core` et tente de le télécharger depuis npm → **404**.
+Le repo utilise `paullefizelier` partout comme sentinelle. Tant qu'il n'est pas remplacé, `pnpm install` ne sait pas que `@paullefizelier/wp-to-strapi-core` vit dans `packages/core` et tente de le télécharger depuis npm → **404**.
 
 Depuis la racine du repo, choisis ton scope npm puis exécute :
 
 ```bash
 # macOS
-grep -rl 'YOUR-NPM-USERNAME' . \
+grep -rl 'paullefizelier' . \
   --exclude-dir=node_modules --exclude-dir=.git \
   --exclude-dir=dist --exclude-dir=.nuxt --exclude-dir=.output \
-  | xargs sed -i '' 's/YOUR-NPM-USERNAME/paul-lefizelier/g'
+  | xargs sed -i '' 's/paullefizelier/paul-lefizelier/g'
 
 # Linux
-grep -rl 'YOUR-NPM-USERNAME' . \
+grep -rl 'paullefizelier' . \
   --exclude-dir=node_modules --exclude-dir=.git \
   --exclude-dir=dist --exclude-dir=.nuxt --exclude-dir=.output \
-  | xargs sed -i 's/YOUR-NPM-USERNAME/paul-lefizelier/g'
+  | xargs sed -i 's/paullefizelier/paul-lefizelier/g'
 ```
 
 Vérifie qu'il n'en reste plus :
 
 ```bash
-grep -r YOUR-NPM-USERNAME . --exclude-dir=node_modules --exclude-dir=.git
+grep -r paullefizelier . --exclude-dir=node_modules --exclude-dir=.git
 # (no output)
 ```
 
@@ -154,7 +154,7 @@ Pour avoir une fiche officielle Strapi Market avec badge, il faut ouvrir un PR s
 
 | Symptôme | Cause | Fix |
 |----------|-------|-----|
-| `ERR_PNPM_FETCH_404 @YOUR-NPM-USERNAME/...` | Placeholder pas remplacé | Refaire le `sed` de l'étape 1 |
+| `ERR_PNPM_FETCH_404 @paullefizelier/...` | Placeholder pas remplacé | Refaire le `sed` de l'étape 1 |
 | `ERR_PNPM_NO_MATCHING_VERSION` sur un package interne | `pnpm-workspace.yaml` absent ou mal configuré | Vérifier qu'il existe à la racine |
 | `npm error 402 Payment Required` au publish | Scoped package en privé par défaut | Vérifier `publishConfig.access: "public"` dans le `package.json` concerné |
 | `npm error 403 Forbidden` au publish | Mauvais token ou 2FA "auth and writes" | Régénérer un token *Automation*, mettre 2FA en *auth only* |

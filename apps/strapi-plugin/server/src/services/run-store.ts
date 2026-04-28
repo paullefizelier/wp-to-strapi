@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { MigratorEvent } from "@YOUR-NPM-USERNAME/wp-to-strapi-core";
+import type { MigratorEvent } from "@paullefizelier/wp-to-strapi-core";
 
 export interface Run {
   id: string;

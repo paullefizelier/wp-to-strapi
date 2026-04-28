@@ -1,4 +1,4 @@
-import { buildConfig, Migrator } from "@YOUR-NPM-USERNAME/wp-to-strapi-core";
+import { buildConfig, Migrator } from "@paullefizelier/wp-to-strapi-core";
 import { MigrationConfigSchema } from "../../shared/schema";
 import { completeRun, currentRun, recordEvent, startRun } from "../utils/runtime";
 

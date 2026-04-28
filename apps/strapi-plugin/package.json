@@ -6,13 +6,13 @@
   "author": "",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/YOUR-NPM-USERNAME/wp-to-strapi.git",
+    "url": "git+https://github.com/paullefizelier/wp-to-strapi.git",
     "directory": "apps/strapi-plugin"
   },
   "bugs": {
-    "url": "https://github.com/YOUR-NPM-USERNAME/wp-to-strapi/issues"
+    "url": "https://github.com/paullefizelier/wp-to-strapi/issues"
   },
-  "homepage": "https://github.com/YOUR-NPM-USERNAME/wp-to-strapi/tree/main/apps/strapi-plugin#readme",
+  "homepage": "https://github.com/paullefizelier/wp-to-strapi/tree/main/apps/strapi-plugin#readme",
   "keywords": ["strapi", "plugin", "strapi-plugin", "wordpress", "import", "migration"],
   "strapi": {
     "name": "wp-import",
@@ -47,8 +47,8 @@
     "prepublishOnly": "npm run build && npm run verify"
   },
   "dependencies": {
-    "@YOUR-NPM-USERNAME/wp-to-strapi-core": "^0.1.0",
-    "@YOUR-NPM-USERNAME/wp-to-strapi-adapter": "^0.1.0"
+    "@paullefizelier/wp-to-strapi-core": "^0.1.0",
+    "@paullefizelier/wp-to-strapi-adapter": "^0.1.0"
   },
   "devDependencies": {
     "@strapi/design-system": "^2.0.0",

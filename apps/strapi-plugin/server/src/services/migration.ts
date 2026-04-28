@@ -1,7 +1,7 @@
 import type { Core } from "@strapi/strapi";
-import { buildConfig, Migrator, WordPressClient } from "@YOUR-NPM-USERNAME/wp-to-strapi-core";
-import { NativeStrapiAdapter } from "@YOUR-NPM-USERNAME/wp-to-strapi-adapter";
-import type { Kind } from "@YOUR-NPM-USERNAME/wp-to-strapi-core";
+import { buildConfig, Migrator, WordPressClient } from "@paullefizelier/wp-to-strapi-core";
+import { NativeStrapiAdapter } from "@paullefizelier/wp-to-strapi-adapter";
+import type { Kind } from "@paullefizelier/wp-to-strapi-core";
 import type { Run } from "./run-store";
 
 interface Settings {

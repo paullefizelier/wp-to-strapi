@@ -1,6 +1,6 @@
 ---
-"@YOUR-NPM-USERNAME/wp-to-strapi-core": minor
-"@YOUR-NPM-USERNAME/wp-to-strapi-adapter": minor
+"@paullefizelier/wp-to-strapi-core": minor
+"@paullefizelier/wp-to-strapi-adapter": minor
 "strapi-plugin-wp-import": minor
 ---
 

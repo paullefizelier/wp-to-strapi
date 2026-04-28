@@ -2,7 +2,7 @@ import type {
   StrapiAdapter,
   StrapiEntry,
   StrapiUploadFile,
-} from "@YOUR-NPM-USERNAME/wp-to-strapi-core";
+} from "@paullefizelier/wp-to-strapi-core";
 
 /**
  * Minimal, loose typing of the Strapi runtime surface we need. Using `any` at the edge

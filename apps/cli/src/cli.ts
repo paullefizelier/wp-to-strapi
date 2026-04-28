@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import "dotenv/config";
-import { buildConfig, Migrator, type Kind, type MigrateOptions, type MigratorEvent } from "@YOUR-NPM-USERNAME/wp-to-strapi-core";
+import { buildConfig, Migrator, type Kind, type MigrateOptions, type MigratorEvent } from "@paullefizelier/wp-to-strapi-core";
 
 function required(name: string): string {
   const v = process.env[name];

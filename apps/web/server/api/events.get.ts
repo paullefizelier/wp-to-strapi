@@ -1,4 +1,4 @@
-import type { MigratorEvent } from "@YOUR-NPM-USERNAME/wp-to-strapi-core";
+import type { MigratorEvent } from "@paullefizelier/wp-to-strapi-core";
 import { currentRun } from "../utils/runtime";
 
 /**

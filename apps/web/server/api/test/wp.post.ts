@@ -1,4 +1,4 @@
-import { WordPressClient } from "@YOUR-NPM-USERNAME/wp-to-strapi-core";
+import { WordPressClient } from "@paullefizelier/wp-to-strapi-core";
 import { z } from "zod";
 
 const Body = z.object({

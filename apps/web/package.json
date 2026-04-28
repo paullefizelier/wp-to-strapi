@@ -1,5 +1,5 @@
 {
-  "name": "@YOUR-NPM-USERNAME/wp-to-strapi-web",
+  "name": "@paullefizelier/wp-to-strapi-web",
   "version": "0.1.0",
   "description": "Nuxt 3 UI for the WordPress → Strapi migrator",
   "license": "MIT",
@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@nuxt/ui": "^2.18.0",
-    "@YOUR-NPM-USERNAME/wp-to-strapi-core": "^0.1.0",
+    "@paullefizelier/wp-to-strapi-core": "^0.1.0",
     "nuxt": "^3.13.0",
     "vue": "^3.4.0",
     "zod": "^3.23.8"

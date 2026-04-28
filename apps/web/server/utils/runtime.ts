@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { MigratorEvent } from "@YOUR-NPM-USERNAME/wp-to-strapi-core";
+import type { MigratorEvent } from "@paullefizelier/wp-to-strapi-core";
 
 /**
  * Single in-process run holder. The web UI is a local tool, so one run at a time is fine.
