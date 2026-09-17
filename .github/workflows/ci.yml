@@ -16,12 +16,12 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Build core
-        run: npm run -w @wp-to-strapi/core build
+        run: npm run -w @paullefizelier/wp-to-strapi-core build
       - name: Typecheck core
-        run: npm run -w @wp-to-strapi/core typecheck
+        run: npm run -w @paullefizelier/wp-to-strapi-core typecheck
       - name: Build strapi-adapter
-        run: npm run -w @wp-to-strapi/strapi-adapter build
+        run: npm run -w @paullefizelier/wp-to-strapi-adapter build
       - name: Typecheck strapi-adapter
-        run: npm run -w @wp-to-strapi/strapi-adapter typecheck
+        run: npm run -w @paullefizelier/wp-to-strapi-adapter typecheck
       - name: Typecheck CLI
-        run: npm run -w @wp-to-strapi/cli typecheck
+        run: npm run -w @paullefizelier/wp-to-strapi-cli typecheck
