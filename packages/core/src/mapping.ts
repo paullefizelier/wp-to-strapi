@@ -115,6 +115,26 @@ export const TRANSFORMS: Record<string, TransformFn> = {
     return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
   },
   default: (v, arg) => (isEmpty(v) ? arg : v),
+  /**
+   * Translate values: `map:actualites=professionnels,blog=grand-public`, with `*` as the
+   * fallback. This is what turns a WordPress slug into a Strapi enumeration value.
+   */
+  map: (v, arg) => {
+    const table = new Map(
+      (arg ?? "")
+        .split(",")
+        .map((pair) => pair.split("="))
+        .filter((parts): parts is [string, string] => parts.length === 2)
+        .map(([from, to]) => [from.trim(), to.trim()]),
+    );
+    const translate = (value: unknown): unknown => {
+      const hit = table.get(asText(value));
+      if (hit !== undefined) return hit;
+      const fallback = table.get("*");
+      return fallback !== undefined ? fallback : value;
+    };
+    return Array.isArray(v) ? v.map(translate) : translate(v);
+  },
 };
 
 function isEmpty(value: unknown): boolean {

@@ -28,6 +28,9 @@ All three consume the same core engine, emit the same typed `MigratorEvent`s, an
   every media URL still pointing at WordPress is flagged as a warning during the run.
 - **Idempotent** — writes a `wpId` on each entry so re-runs update instead of duplicating.
 - **Resumable** — persisted state file survives crashes.
+- **Resilient** — rate limiting, 5xx and dropped sockets are retried with exponential backoff
+  (honouring `Retry-After`); anything the server refuses deliberately is not.
+- **Previewable** — see the exact payloads before writing a single entry.
 - Typed event bus (`MigratorEvent`) — every front-end subscribes to the same stream.
 - **Fully configurable field mapping** — any WordPress path onto any Strapi field, with
   transforms, plus constants applied to every import.
@@ -152,7 +155,7 @@ you leave out keep the built-in behaviour, so an empty mapping changes nothing.
 |---|---|
 | Text | `decodeEntities` `stripHtml` `trim` `lower` `upper` `slugify` `truncate:280` `join:, ` |
 | References | `rewriteMedia` `mediaId` `mediaUrl` `terms:categories` `terms:tags` |
-| Values | `date` `number` `boolean` `string` `first` `default:fallback` |
+| Values | `date` `number` `boolean` `string` `first` `default:fallback` `map:actualites=pro,*=public` |
 
 **Select / enumeration fields** take a constant like any other target:
 `{ "target": "audience", "value": "professionnels" }` on the `post` rows sets it on every
@@ -161,9 +164,39 @@ enumeration's declared values — discovery lists them next to the field name, a
 them in the value box. Constants typed in a UI arrive as strings, so a number or boolean field
 needs the matching transform: `{ "target": "priorite", "value": "3", "transforms": ["number"] }`.
 
+`map:` is what turns WordPress values into Strapi enumeration values —
+`{ "target": "audience", "source": "acf.kind", "transforms": ["map:actualites=professionnels,*=grand-public"] }`,
+with `*` as the fallback.
+
 `omitEmpty: true` drops the field instead of writing an empty value. A mapping is validated
-before the run starts: an unknown transform or a row with neither a source nor a value aborts
-it rather than importing something wrong.
+before the run starts: an unknown transform, a row with neither a source nor a value, or a
+mapping that never writes the **correlation field** aborts it rather than importing something
+wrong. That last one matters — the correlation field (`wpId` by default, `strapi.correlationField`
+to rename it) is what makes a re-run update instead of duplicating, so dropping it would
+silently turn every re-import into a second copy of the site.
+
+### Preview before you import
+
+A mapping is only trustworthy if you can see its output before pointing it at three thousand
+posts. Preview runs the real pipeline — page-builder fallback, media rewriting, relations,
+transforms — on a couple of entries and hands back the exact payloads, writing nothing.
+
+```bash
+npm run cli -- preview --kind posts --limit 2
+```
+
+```
+── posts #1 (welcome) → api::post.post
+{
+  "locale": "fr",
+  "titre": "Welcome",
+  "audience": "grand-public",
+  "wpId": 1
+}
+  ⚠ No media migrated yet — media URLs and cover fields stay unresolved in this preview.
+```
+
+Both UIs have the same thing behind an **Aperçu / Preview** button next to the mapping editor.
 
 ### Picking fields from both sides
 

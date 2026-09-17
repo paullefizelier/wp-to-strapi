@@ -4,7 +4,16 @@ export { WordPressClient } from "./wordpress-client.js";
 export { StrapiClient } from "./strapi-client.js";
 export type { StrapiAdapter } from "./strapi-adapter.js";
 export { Migrator } from "./migrator.js";
-export type { Kind, MigrateOptions, MigratorDeps, MigratorEvent } from "./migrator.js";
+export type {
+  Kind,
+  MigrateOptions,
+  MigratorDeps,
+  MigratorEvent,
+  PreviewItem,
+  PreviewOptions,
+} from "./migrator.js";
+export { withRetry, parseRetryAfter, HttpStatusError } from "./retry.js";
+export type { RetryOptions } from "./retry.js";
 export {
   buildMediaIndex,
   decodeEntities,

@@ -89,6 +89,54 @@ const enumOptions = computed<Record<string, string[]>>(() =>
 );
 const transformNames = Object.keys(TRANSFORMS);
 
+interface PreviewItem {
+  kind: string;
+  wpId: number;
+  slug: string;
+  uid: string;
+  data: Record<string, unknown>;
+  warnings: string[];
+}
+
+const preview = ref<PreviewItem[] | null>(null);
+const previewing = ref(false);
+const previewError = ref<string | null>(null);
+
+/** Run the real pipeline on a couple of entries and show the payloads, writing nothing. */
+async function runPreview() {
+  previewing.value = true;
+  previewError.value = null;
+  preview.value = null;
+  const key = active.value;
+  const kind = key.startsWith("custom:")
+    ? "custom"
+    : key === "page"
+      ? "pages"
+      : key === "category"
+        ? "categories"
+        : key === "tag"
+          ? "tags"
+          : "posts";
+  try {
+    const res = await $fetch<{ items: PreviewItem[] }>("/api/preview", {
+      method: "POST",
+      body: {
+        ...config.value,
+        // The preview needs a token to typecheck the config, never to write.
+        strapi: { ...config.value.strapi, token: config.value.strapi.token || "preview" },
+        kind,
+        restBase: key.startsWith("custom:") ? key.slice("custom:".length) : undefined,
+        limit: 2,
+      },
+    });
+    preview.value = res.items;
+  } catch (err) {
+    previewError.value = (err as { statusMessage?: string }).statusMessage ?? String(err);
+  } finally {
+    previewing.value = false;
+  }
+}
+
 const sourceFields = ref<SourceField[]>([]);
 const targetSchema = ref<TargetSchema | null>(null);
 const discovering = ref(false);
@@ -170,16 +218,28 @@ function setTransforms(index: number, text: string) {
             Chaque ligne écrit un champ Strapi, depuis un champ WordPress ou une valeur fixe.
           </p>
         </div>
-        <UButton
-          :loading="discovering"
-          :disabled="!config.wp.baseUrl || !config.strapi.baseUrl"
-          size="sm"
-          color="gray"
-          icon="i-heroicons-arrow-path"
-          @click="discover"
-        >
-          Lire les champs disponibles
-        </UButton>
+        <div class="flex items-center gap-2">
+          <UButton
+            :loading="previewing"
+            :disabled="!config.wp.baseUrl || issues.length > 0"
+            size="sm"
+            color="gray"
+            icon="i-heroicons-eye"
+            @click="runPreview"
+          >
+            Aperçu
+          </UButton>
+          <UButton
+            :loading="discovering"
+            :disabled="!config.wp.baseUrl || !config.strapi.baseUrl"
+            size="sm"
+            color="gray"
+            icon="i-heroicons-arrow-path"
+            @click="discover"
+          >
+            Lire les champs disponibles
+          </UButton>
+        </div>
       </div>
     </template>
 
@@ -311,6 +371,38 @@ function setTransforms(index: number, text: string) {
         <UButton size="xs" color="gray" variant="ghost" @click="resetToDefault">
           {{ active === "common" ? "Tout retirer" : "Revenir au mapping par défaut" }}
         </UButton>
+      </div>
+
+      <div v-if="previewError || preview" class="space-y-2">
+        <UAlert
+          v-if="previewError"
+          color="red"
+          variant="subtle"
+          icon="i-heroicons-exclamation-triangle"
+          title="Aperçu impossible"
+          :description="previewError"
+        />
+        <template v-else-if="preview">
+          <p class="text-sm font-medium">
+            Ce qui serait écrit dans Strapi (rien n'est envoyé) :
+          </p>
+          <div v-for="item in preview" :key="item.wpId" class="space-y-1">
+            <p class="text-xs text-gray-500 font-mono">
+              #{{ item.wpId }} · {{ item.slug }} → {{ item.uid }}
+            </p>
+            <pre class="text-xs bg-gray-50 dark:bg-gray-900 rounded p-3 overflow-x-auto">{{ JSON.stringify(item.data, null, 2) }}</pre>
+            <p
+              v-for="(w, wi) in item.warnings"
+              :key="wi"
+              class="text-xs text-amber-600 dark:text-amber-400"
+            >
+              ⚠ {{ w }}
+            </p>
+          </div>
+          <p v-if="preview.length === 0" class="text-sm text-gray-500">
+            Rien à prévisualiser pour ce type de contenu.
+          </p>
+        </template>
       </div>
 
       <UAlert

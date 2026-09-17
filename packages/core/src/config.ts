@@ -27,6 +27,11 @@ export interface StrapiConfig {
   /** Relation field names on the post content-type. */
   categoryField: string;
   tagField: string;
+  /**
+   * Field holding the WordPress id on every Strapi entry. It is what makes a re-run update
+   * instead of duplicating, so the mapping must write it.
+   */
+  correlationField: string;
 }
 
 /** A WordPress custom post type mapped onto a Strapi collection. */
@@ -56,6 +61,8 @@ export interface AppConfig {
    * needs credentials, and lands in Strapi as a draft (`publishedAt: null`).
    */
   statuses: string[];
+  /** Extra attempts on rate limiting, 5xx and dropped sockets, per request. */
+  retries: number;
   /** Custom post types to migrate alongside posts and pages. */
   customTypes: CustomTypeConfig[];
   /**
@@ -71,8 +78,10 @@ export const DRAFT_STATUSES = ["draft", "pending", "future", "private"] as const
 export const defaults = {
   htmlFallback: true,
   statuses: ["publish"],
+  retries: 3,
   categoryField: "categories",
   tagField: "tags",
+  correlationField: "wpId",
   concurrency: 4,
   pageSize: 100,
   stateFile: "./.migration-state.json",
@@ -91,6 +100,7 @@ export function buildConfig(input: {
   dryRun?: boolean;
   htmlFallback?: boolean;
   statuses?: string[];
+  retries?: number;
   customTypes?: CustomTypeConfig[];
   mapping?: MappingSet;
 }): AppConfig {
@@ -113,6 +123,7 @@ export function buildConfig(input: {
       tagPluralPath: input.strapi.tagPluralPath,
       categoryField: input.strapi.categoryField ?? defaults.categoryField,
       tagField: input.strapi.tagField ?? defaults.tagField,
+      correlationField: input.strapi.correlationField ?? defaults.correlationField,
     },
     concurrency: input.concurrency ?? defaults.concurrency,
     pageSize: input.pageSize ?? defaults.pageSize,
@@ -121,6 +132,7 @@ export function buildConfig(input: {
     htmlFallback: input.htmlFallback ?? defaults.htmlFallback,
     statuses:
       input.statuses && input.statuses.length > 0 ? [...input.statuses] : [...defaults.statuses],
+    retries: input.retries ?? defaults.retries,
     customTypes: input.customTypes ? [...input.customTypes] : [],
     mapping: input.mapping ?? {},
   };

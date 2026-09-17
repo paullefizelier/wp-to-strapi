@@ -61,6 +61,37 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => {
       complete: (run: Run, err?: Error) => void;
     };
 
+  /** One place where stored settings become an AppConfig, shared by preview and start. */
+  const buildCfg = async () => {
+    const s = await settingsSvc().get();
+    if (!s.wpBaseUrl) throw new Error("WP base URL not configured");
+    return buildConfig({
+      wp: {
+        baseUrl: s.wpBaseUrl,
+        username: s.wpUsername || undefined,
+        appPassword: s.wpAppPassword || undefined,
+      },
+      strapi: {
+        // baseUrl and token are unused by the native adapter but still required by the shape.
+        baseUrl: "http://internal",
+        token: "internal",
+        postUid: s.postUid,
+        pageUid: s.pageUid,
+        categoryUid: s.categoryUid || undefined,
+        tagUid: s.tagUid || undefined,
+      },
+      concurrency: s.concurrency,
+      pageSize: s.pageSize,
+      statuses: s.statuses,
+      customTypes: parseCustomTypes(s.customTypes),
+      htmlFallback: s.htmlFallback,
+      mapping: parseMapping(s.mapping),
+      stateFile:
+        (strapi.config.get("plugin::wp-import.stateFile") as string | undefined) ??
+        "./.wp-import-state.json",
+    });
+  };
+
   return {
     async testWordPress(): Promise<{ ok: boolean; counts?: { posts: number; pages: number; media: number }; error?: string }> {
       const s = await settingsSvc().get();
@@ -98,34 +129,19 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => {
       return adapter.describeTarget(uid);
     },
 
+    /** Render what a run would write, without writing it. */
+    async preview(opts: { kind?: "posts" | "pages" | "categories" | "tags" | "custom"; restBase?: string; limit?: number }) {
+      const cfg = await buildCfg();
+      const adapter = new NativeStrapiAdapter(
+        strapi as unknown as ConstructorParameters<typeof NativeStrapiAdapter>[0],
+      );
+      const migrator = new Migrator(cfg, { strapi: adapter });
+    
+  return { items: await migrator.preview(opts) };
+    },
+
     async start(only?: Kind[]): Promise<Run> {
-      const s = await settingsSvc().get();
-      if (!s.wpBaseUrl) throw new Error("WP base URL not configured");
-
-      const cfg = buildConfig({
-        wp: {
-          baseUrl: s.wpBaseUrl,
-          username: s.wpUsername || undefined,
-          appPassword: s.wpAppPassword || undefined,
-        },
-        strapi: {
-          // baseUrl and token are unused by the native adapter but still required by the config shape.
-          baseUrl: "http://internal",
-          token: "internal",
-          postUid: s.postUid,
-          pageUid: s.pageUid,
-          categoryUid: s.categoryUid || undefined,
-          tagUid: s.tagUid || undefined,
-        },
-        concurrency: s.concurrency,
-        pageSize: s.pageSize,
-        statuses: s.statuses,
-        customTypes: parseCustomTypes(s.customTypes),
-        htmlFallback: s.htmlFallback,
-        mapping: parseMapping(s.mapping),
-        stateFile: (strapi.config.get("plugin::wp-import.stateFile") as string | undefined) ?? "./.wp-import-state.json",
-      });
-
+      const cfg = await buildCfg();
       const run = runStoreSvc().start();
       const adapter = new NativeStrapiAdapter(
         strapi as unknown as ConstructorParameters<typeof NativeStrapiAdapter>[0],

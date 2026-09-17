@@ -1,5 +1,6 @@
 import { request, FormData, type Dispatcher } from "undici";
 import type { TargetField, TargetSchema } from "./introspect.js";
+import { HttpStatusError, parseRetryAfter, withRetry } from "./retry.js";
 import type { StrapiEntry, StrapiUploadFile } from "./types.js";
 
 type HttpMethod = Dispatcher.HttpMethod;
@@ -7,6 +8,9 @@ type HttpMethod = Dispatcher.HttpMethod;
 export interface StrapiClientOptions {
   baseUrl: string;
   token: string;
+  /** Extra attempts on rate limiting, 5xx and dropped sockets. */
+  retries?: number;
+  onRetry?: (attempt: number, delayMs: number, reason: string) => void;
 }
 
 /**
@@ -19,29 +23,37 @@ export interface StrapiClientOptions {
  *  - Media upload is unchanged from v4: POST /api/upload (multipart/form-data).
  */
 export class StrapiClient {
-  constructor(private readonly opts: StrapiClientOptions) {}
+  private readonly retry: { retries: number; onRetry?: StrapiClientOptions["onRetry"] };
+
+  constructor(private readonly opts: StrapiClientOptions) {
+    this.retry = { retries: opts.retries ?? 3, onRetry: opts.onRetry };
+  }
 
   private async json<T>(
     method: HttpMethod,
     path: string,
     body?: unknown,
   ): Promise<T> {
-    const res = await request(`${this.opts.baseUrl}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${this.opts.token}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      const text = await res.body.text();
-      throw new Error(
-        `Strapi ${method} ${path} failed ${res.statusCode}: ${text.slice(0, 500)}`,
-      );
-    }
-    return (await res.body.json()) as T;
+    return withRetry(async () => {
+      const res = await request(`${this.opts.baseUrl}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.opts.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        const text = await res.body.text();
+        throw new HttpStatusError(
+          `Strapi ${method} ${path} failed ${res.statusCode}: ${text.slice(0, 500)}`,
+          res.statusCode,
+          parseRetryAfter(res.headers["retry-after"]),
+        );
+      }
+      return (await res.body.json()) as T;
+    }, this.retry);
   }
 
   /** Derive the plural REST path from an API UID like `api::post.post`. */
@@ -99,18 +111,22 @@ export class StrapiClient {
       form.append("fileInfo", JSON.stringify(fileInfo));
     }
 
-    const res = await request(`${this.opts.baseUrl}/api/upload`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${this.opts.token}` },
-      body: form,
-    });
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      const text = await res.body.text();
-      throw new Error(
-        `Strapi upload failed ${res.statusCode}: ${text.slice(0, 500)}`,
-      );
-    }
-    const arr = (await res.body.json()) as StrapiUploadFile[];
+    const arr = await withRetry(async () => {
+      const res = await request(`${this.opts.baseUrl}/api/upload`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.opts.token}` },
+        body: form,
+      });
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        const text = await res.body.text();
+        throw new HttpStatusError(
+          `Strapi upload failed ${res.statusCode}: ${text.slice(0, 500)}`,
+          res.statusCode,
+          parseRetryAfter(res.headers["retry-after"]),
+        );
+      }
+      return (await res.body.json()) as StrapiUploadFile[];
+    }, this.retry);
     if (!arr[0]) throw new Error("Strapi upload returned empty array");
     return arr[0];
   }

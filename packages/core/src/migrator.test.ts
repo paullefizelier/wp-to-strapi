@@ -294,6 +294,39 @@ describe("Migrator", () => {
     expect(strapi.created).toEqual([]);
   });
 
+  it("refuses a mapping that would break re-runs by dropping the correlation field", async () => {
+    const strapi = fakeStrapi();
+    const wp = fakeWp();
+    const migrator = new Migrator(
+      config({ mapping: { post: [{ target: "titre", source: "title.rendered" }] } }),
+      { strapi: strapi.adapter, wp: wp.wp },
+    );
+    await expect(migrator.run()).rejects.toThrow(/never writes "wpId".*duplicates/s);
+    expect(strapi.created).toEqual([]);
+  });
+
+  it("accepts a renamed correlation field when the mapping writes it", async () => {
+    const strapi = fakeStrapi();
+    const wp = fakeWp();
+    const migrator = new Migrator(
+      config({
+        strapi: {
+          baseUrl: "https://cms.example.com",
+          token: "t",
+          correlationField: "wordpressId",
+        },
+        mapping: {
+          post: [{ target: "wordpressId", source: "id" }],
+          page: [{ target: "wordpressId", source: "id" }],
+        },
+        customTypes: [],
+      }),
+      { strapi: strapi.adapter, wp: wp.wp },
+    );
+    await migrator.run({ only: ["posts"] });
+    expect(strapi.created[0]?.data).toEqual({ wordpressId: 1 });
+  });
+
   it("only runs the kinds asked for", async () => {
     const strapi = fakeStrapi();
     const wp = fakeWp();

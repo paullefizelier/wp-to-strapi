@@ -207,6 +207,21 @@ describe("select/enumeration targets", () => {
     expect(data).toEqual({ priorite: 3, miseEnAvant: true });
   });
 
+  it("translates WordPress values into enumeration values", () => {
+    const { data } = applyMapping(
+      { ...entity, acf: { ...entity.acf, kind: "actualites" }, tags: ["promo", "interne"] },
+      [
+        { target: "audience", source: "acf.kind", transforms: ["map:actualites=professionnels,blog=grand-public"] },
+        { target: "visibilite", source: "slug", transforms: ["map:*=grand-public"] },
+        { target: "labels", source: "tags", transforms: ["map:promo=promotion"] },
+      ],
+      ctx,
+    );
+    expect(data.audience).toBe("professionnels");
+    expect(data.visibilite).toBe("grand-public");
+    expect(data.labels).toEqual(["promotion", "interne"]);
+  });
+
   it("can derive the value from WordPress instead of fixing it", () => {
     const { data } = applyMapping(
       entity,

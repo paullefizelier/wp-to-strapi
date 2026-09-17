@@ -1,5 +1,6 @@
 import { request } from "undici";
 import { flattenEntity, VIRTUAL_SOURCES, type SourceField } from "./introspect.js";
+import { HttpStatusError, parseRetryAfter, withRetry } from "./retry.js";
 import type { WpMedia, WpPage, WpPost, WpTerm } from "./types.js";
 
 export interface WordPressClientOptions {
@@ -7,16 +8,22 @@ export interface WordPressClientOptions {
   username?: string;
   appPassword?: string;
   pageSize?: number;
+  /** Extra attempts on rate limiting, 5xx and dropped sockets. */
+  retries?: number;
+  /** Called before each backoff wait, so a run can log what it is waiting on. */
+  onRetry?: (attempt: number, delayMs: number, reason: string) => void;
 }
 
 export class WordPressClient {
   private readonly baseUrl: string;
   private readonly authHeader?: string;
   private readonly pageSize: number;
+  private readonly retry: { retries: number; onRetry?: WordPressClientOptions["onRetry"] };
 
   constructor(opts: WordPressClientOptions) {
     this.baseUrl = `${opts.baseUrl.replace(/\/+$/, "")}/wp-json/wp/v2`;
     this.pageSize = opts.pageSize ?? 100;
+    this.retry = { retries: opts.retries ?? 3, onRetry: opts.onRetry };
     if (opts.username && opts.appPassword) {
       const b64 = Buffer.from(`${opts.username}:${opts.appPassword}`).toString(
         "base64",
@@ -39,17 +46,21 @@ export class WordPressClient {
     };
     if (this.authHeader) headers.Authorization = this.authHeader;
 
-    const res = await request(url, { method: "GET", headers });
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      const text = await res.body.text();
-      throw new Error(
-        `WP GET ${url.pathname} failed ${res.statusCode}: ${text.slice(0, 300)}`,
-      );
-    }
-    const totalPages = Number(res.headers["x-wp-totalpages"] ?? "1");
-    const total = Number(res.headers["x-wp-total"] ?? "0");
-    const body = (await res.body.json()) as T;
-    return { body, totalPages, total };
+    return withRetry(async () => {
+      const res = await request(url, { method: "GET", headers });
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        const text = await res.body.text();
+        throw new HttpStatusError(
+          `WP GET ${url.pathname} failed ${res.statusCode}: ${text.slice(0, 300)}`,
+          res.statusCode,
+          parseRetryAfter(res.headers["retry-after"]),
+        );
+      }
+      const totalPages = Number(res.headers["x-wp-totalpages"] ?? "1");
+      const total = Number(res.headers["x-wp-total"] ?? "0");
+      const body = (await res.body.json()) as T;
+      return { body, totalPages, total };
+    }, this.retry);
   }
 
   /**
@@ -147,37 +158,48 @@ export class WordPressClient {
    * page builders keep their layout in post meta and only emit it on the front end.
    */
   async fetchPage(url: string): Promise<string> {
-    const res = await request(url, {
-      method: "GET",
-      maxRedirections: 3,
-      headers: {
-        Accept: "text/html",
-        "User-Agent": "wp-to-strapi/0.1",
-        ...(this.authHeader ? { Authorization: this.authHeader } : {}),
-      },
-    });
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw new Error(`WP GET ${url} failed: ${res.statusCode}`);
-    }
-    return res.body.text();
+    return withRetry(async () => {
+      const res = await request(url, {
+        method: "GET",
+        maxRedirections: 3,
+        headers: {
+          Accept: "text/html",
+          "User-Agent": "wp-to-strapi/0.1",
+          ...(this.authHeader ? { Authorization: this.authHeader } : {}),
+        },
+      });
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw new HttpStatusError(
+          `WP GET ${url} failed: ${res.statusCode}`,
+          res.statusCode,
+          parseRetryAfter(res.headers["retry-after"]),
+        );
+      }
+      return res.body.text();
+    }, this.retry);
   }
 
   async fetchBinary(
     url: string,
   ): Promise<{ buffer: Buffer; contentType: string }> {
-    const res = await request(url, {
-      method: "GET",
-      headers: this.authHeader
-        ? { Authorization: this.authHeader, "User-Agent": "wp-to-strapi/0.1" }
-        : { "User-Agent": "wp-to-strapi/0.1" },
-    });
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw new Error(`Download ${url} failed: ${res.statusCode}`);
-    }
-    const arr = await res.body.arrayBuffer();
-    const contentType =
-      (res.headers["content-type"] as string | undefined) ??
-      "application/octet-stream";
-    return { buffer: Buffer.from(arr), contentType };
+    return withRetry(async () => {
+      const res = await request(url, {
+        method: "GET",
+        headers: this.authHeader
+          ? { Authorization: this.authHeader, "User-Agent": "wp-to-strapi/0.1" }
+          : { "User-Agent": "wp-to-strapi/0.1" },
+      });
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw new HttpStatusError(
+          `Download ${url} failed: ${res.statusCode}`,
+          res.statusCode,
+          parseRetryAfter(res.headers["retry-after"]),
+        );
+      }
+      const arr = await res.body.arrayBuffer();
+      const contentType =
+        (res.headers["content-type"] as string | undefined) ?? "application/octet-stream";
+      return { buffer: Buffer.from(arr), contentType };
+    }, this.retry);
   }
 }

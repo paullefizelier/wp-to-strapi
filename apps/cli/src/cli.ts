@@ -79,6 +79,7 @@ function loadConfigFromEnv() {
       tagPluralPath: process.env.STRAPI_TAG_PLURAL,
     },
     concurrency: process.env.CONCURRENCY ? Number(process.env.CONCURRENCY) : undefined,
+    retries: process.env.RETRIES ? Number(process.env.RETRIES) : undefined,
     pageSize: process.env.PAGE_SIZE ? Number(process.env.PAGE_SIZE) : undefined,
     stateFile: process.env.STATE_FILE,
     dryRun: (process.env.DRY_RUN || "false").toLowerCase() === "true",
@@ -90,6 +91,34 @@ function loadConfigFromEnv() {
 }
 
 const KINDS: Kind[] = ["media", "categories", "tags", "posts", "pages", "custom"];
+
+interface PreviewArgs {
+  kind: "posts" | "pages" | "categories" | "tags" | "custom";
+  restBase?: string;
+  limit: number;
+}
+
+function parsePreviewArgs(argv: string[]): PreviewArgs {
+  const args: PreviewArgs = { kind: "posts", limit: 3 };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+    if (arg === "--kind" && next) {
+      if (!["posts", "pages", "categories", "tags", "custom"].includes(next)) {
+        throw new Error(`Unknown --kind value: ${next}`);
+      }
+      args.kind = next as PreviewArgs["kind"];
+      i += 1;
+    } else if (arg === "--rest-base" && next) {
+      args.restBase = next;
+      i += 1;
+    } else if (arg === "--limit" && next) {
+      args.limit = Number(next);
+      i += 1;
+    }
+  }
+  return args;
+}
 
 function parseArgs(argv: string[]): MigrateOptions {
   const only: Kind[] = [];
@@ -141,18 +170,37 @@ function wireLogging(m: Migrator): void {
 
 async function main(): Promise<void> {
   const [, , command = "migrate", ...rest] = process.argv;
+
+  if (command === "preview") {
+    const { kind, restBase, limit } = parsePreviewArgs(rest);
+    const migrator = new Migrator(loadConfigFromEnv());
+    const items = await migrator.preview({ kind, restBase, limit });
+    for (const item of items) {
+      console.log(`\n── ${item.kind} #${item.wpId} (${item.slug}) → ${item.uid}`);
+      console.log(JSON.stringify(item.data, null, 2));
+      for (const w of item.warnings) console.warn(`  ⚠ ${w}`);
+    }
+    if (items.length === 0) console.log("Nothing to preview.");
+    return;
+  }
+
   if (command !== "migrate") {
-    console.error(`Unknown command: ${command}. Usage: wp-to-strapi migrate [--only media,posts,pages]`);
+    console.error(
+      `Unknown command: ${command}.\n` +
+        `Usage:\n` +
+        `  wp-to-strapi migrate [--only media,categories,tags,posts,pages,custom]\n` +
+        `  wp-to-strapi preview [--kind posts|pages|categories|tags|custom] [--rest-base <base>] [--limit 3]`,
+    );
     process.exit(1);
   }
-  const opts = parseArgs(rest);
+
   const cfg = loadConfigFromEnv();
   const migrator = new Migrator(cfg);
   wireLogging(migrator);
-  await migrator.run(opts);
+  await migrator.run(parseArgs(rest));
 }
 
-main().catch((err) => {
-  console.error("Migration failed:", err);
+main().catch((err: unknown) => {
+  console.error(`Migration failed: ${String(err)}`);
   process.exit(1);
 });

@@ -7,6 +7,7 @@ export default ({ strapi }: { strapi: Core.Strapi }) => {
     strapi.plugin("wp-import").service("migration") as {
       testWordPress: () => Promise<unknown>;
       start: (only?: Kind[]) => Promise<Run>;
+      preview: (opts: { kind?: string; restBase?: string; limit?: number }) => Promise<unknown>;
       wpFields: (restBase: string) => Promise<unknown>;
       strapiFields: (uid: string) => Promise<unknown>;
     };
@@ -19,6 +20,10 @@ export default ({ strapi }: { strapi: Core.Strapi }) => {
   return {
     async testWp() {
       return migrationSvc().testWordPress();
+    },
+
+    async preview(ctx: { request: { body?: { kind?: string; restBase?: string; limit?: number } } }) {
+      return migrationSvc().preview(ctx.request.body ?? {});
     },
 
     async wpFields(ctx: { query?: { type?: string } }) {

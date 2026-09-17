@@ -32,6 +32,12 @@ export default {
         config: { policies: [] },
       },
       {
+        method: "POST",
+        path: "/preview",
+        handler: "migration.preview",
+        config: { policies: [] },
+      },
+      {
         method: "GET",
         path: "/fields/wp",
         handler: "migration.wpFields",

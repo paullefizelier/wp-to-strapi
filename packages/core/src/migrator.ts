@@ -64,6 +64,26 @@ export declare interface Migrator {
   emit(event: "event", e: MigratorEvent): boolean;
 }
 
+/** One entry as it would be written, produced without touching Strapi. */
+export interface PreviewItem {
+  kind: Kind;
+  wpId: number;
+  slug: string;
+  /** Strapi content-type the payload would go to. */
+  uid: string;
+  data: Record<string, unknown>;
+  warnings: string[];
+}
+
+export interface PreviewOptions {
+  /** Which kind to sample. Defaults to posts. */
+  kind?: "posts" | "pages" | "categories" | "tags" | "custom";
+  /** REST base when previewing a custom type. */
+  restBase?: string;
+  /** How many entries to render. */
+  limit?: number;
+}
+
 export interface MigratorDeps {
   /**
    * Optional override for the Strapi side. When omitted, the Migrator spins up an HTTP
@@ -89,12 +109,16 @@ export class Migrator extends EventEmitter {
         username: cfg.wp.username,
         appPassword: cfg.wp.appPassword,
         pageSize: cfg.pageSize,
+        retries: cfg.retries,
+        onRetry: (attempt, delayMs, reason) => this.reportRetry("WordPress", attempt, delayMs, reason),
       });
     this.strapi =
       deps.strapi ??
       new StrapiClient({
         baseUrl: cfg.strapi.baseUrl,
         token: cfg.strapi.token,
+        retries: cfg.retries,
+        onRetry: (attempt, delayMs, reason) => this.reportRetry("Strapi", attempt, delayMs, reason),
       });
     this.state = new StateStore(cfg.stateFile);
     this.limit = pLimit(cfg.concurrency);
@@ -102,6 +126,15 @@ export class Migrator extends EventEmitter {
 
   private fire(e: MigratorEvent): void {
     this.emit("event", e);
+  }
+
+  /** Surface waiting as progress, so a throttled run does not look frozen. */
+  private reportRetry(side: string, attempt: number, delayMs: number, reason: string): void {
+    this.fire({
+      type: "log",
+      level: "warn",
+      message: `${side}: ${reason} — retry ${attempt} in ${delayMs}ms`,
+    });
   }
 
   /**
@@ -133,6 +166,29 @@ export class Migrator extends EventEmitter {
     const problems = sets.flatMap(([name, rows]) =>
       rows ? validateMapping(rows).map((i) => `${name}.${i.target || "?"}: ${i.message}`) : [],
     );
+    // A mapping that drops the correlation field turns every re-run into a duplicate import.
+    const key = this.cfg.strapi.correlationField;
+    const kinds: Array<["post" | "page" | "category" | "tag", string | undefined]> = [
+      ["post", undefined],
+      ["page", undefined],
+      ["category", undefined],
+      ["tag", undefined],
+      ...this.cfg.customTypes.map(
+        (t) => ["post", t.restBase] as ["post", string],
+      ),
+    ];
+    for (const [kind, restBase] of kinds) {
+      if (kind === "category" && !this.cfg.strapi.categoryUid) continue;
+      if (kind === "tag" && !this.cfg.strapi.tagUid) continue;
+      const rows = this.mappingFor(kind, restBase);
+      if (!rows.some((row) => row.target === key)) {
+        problems.push(
+          `${restBase ?? kind}: the mapping never writes "${key}", so re-running would create ` +
+            `duplicates instead of updating. Add it, or change strapi.correlationField.`,
+        );
+      }
+    }
+
     if (problems.length > 0) {
       for (const message of problems) this.fire({ type: "log", level: "error", message });
       throw new Error(`Invalid field mapping: ${problems.join("; ")}`);
@@ -231,7 +287,12 @@ export class Migrator extends EventEmitter {
         this.fire({ type: "item-ok", kind, wpId: term.id, detail: `[dry-run] ${term.slug}` });
         return;
       }
-      const existing = await this.strapi.findOneBy(uid, "wpId", term.id, pluralOverride);
+      const existing = await this.strapi.findOneBy(
+        uid,
+        this.cfg.strapi.correlationField,
+        term.id,
+        pluralOverride,
+      );
       const saved = existing
         ? await this.strapi.update(uid, existing.documentId, data, pluralOverride)
         : await this.strapi.create(uid, data, pluralOverride);
@@ -281,6 +342,83 @@ export class Migrator extends EventEmitter {
     } catch (err) {
       this.fire({ type: "item-error", kind: "custom", wpId: p.id, message: (err as Error).message });
     }
+  }
+
+  /**
+   * Render what a run would write, without writing it.
+   *
+   * A mapping is only trustworthy if you can see its output before pointing it at three
+   * thousand posts. This runs the real pipeline — fallback, media rewriting, relations,
+   * transforms — and hands back the payloads and the warnings, touching nothing.
+   */
+  async preview(opts: PreviewOptions = {}): Promise<PreviewItem[]> {
+    this.assertMappingValid();
+    await this.state.load();
+    const limit = Math.max(1, opts.limit ?? 3);
+    const kind = opts.kind ?? "posts";
+    const items: PreviewItem[] = [];
+
+    if (kind === "categories" || kind === "tags") {
+      const uid = kind === "categories" ? this.cfg.strapi.categoryUid : this.cfg.strapi.tagUid;
+      if (!uid) throw new Error(`No Strapi UID configured for ${kind}`);
+      for await (const term of this.wp.terms(kind)) {
+        const mapped = applyMapping(term, this.mappingFor(kind === "tags" ? "tag" : "category"), {
+          state: this.state.get(),
+          strapiBaseUrl: this.cfg.strapi.baseUrl,
+        });
+        items.push({
+          kind,
+          uid,
+          wpId: term.id,
+          slug: term.slug,
+          data: mapped.data,
+          warnings: mapped.warnings,
+        });
+        if (items.length >= limit) break;
+      }
+      return items;
+    }
+
+    const custom = kind === "custom" ? this.cfg.customTypes.find(
+      (t) => !opts.restBase || t.restBase === opts.restBase,
+    ) : undefined;
+    if (kind === "custom" && !custom) throw new Error("No custom type configured to preview");
+
+    const source =
+      kind === "pages"
+        ? this.wp.pages(this.cfg.statuses)
+        : custom
+          ? this.wp.customType(custom.restBase, this.cfg.statuses)
+          : this.wp.posts(this.cfg.statuses);
+    const uid = kind === "pages"
+      ? this.cfg.strapi.pageUid
+      : (custom?.uid ?? this.cfg.strapi.postUid);
+
+    for await (const entry of source) {
+      const built = await this.buildEntryData(
+        entry,
+        kind === "pages" ? "page" : "post",
+        custom?.restBase,
+      );
+      items.push({
+        kind: kind === "custom" ? "custom" : kind,
+        uid,
+        wpId: entry.id,
+        slug: entry.slug,
+        data: built.data,
+        warnings: built.warnings,
+      });
+      if (items.length >= limit) break;
+    }
+
+    if (Object.keys(this.state.get().media).length === 0) {
+      for (const item of items) {
+        item.warnings.push(
+          "No media migrated yet — media URLs and cover fields stay unresolved in this preview.",
+        );
+      }
+    }
+    return items;
   }
 
   // ----- Media -----
@@ -507,7 +645,12 @@ export class Migrator extends EventEmitter {
     if (this.cfg.dryRun) {
       return { documentId: "dry-run" };
     }
-    const existing = await this.strapi.findOneBy(uid, "wpId", p.id, pluralOverride);
+    const existing = await this.strapi.findOneBy(
+      uid,
+      this.cfg.strapi.correlationField,
+      p.id,
+      pluralOverride,
+    );
     if (existing) {
       const updated = await this.strapi.update(uid, existing.documentId, data, pluralOverride);
       return { documentId: updated.documentId };

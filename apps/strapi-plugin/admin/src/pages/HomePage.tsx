@@ -86,6 +86,27 @@ const HomePage = () => {
   const [wpFields, setWpFields] = useState<SourceField[]>([]);
   const [strapiFields, setStrapiFields] = useState<TargetSchema | null>(null);
   const [discovering, setDiscovering] = useState(false);
+  const [preview, setPreview] = useState<Array<{ wpId: number; slug: string; uid: string; data: unknown; warnings: string[] }> | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+
+  /** Render what a run would write, without writing it. */
+  async function runPreview() {
+    setPreviewing(true);
+    setPreviewError(null);
+    setPreview(null);
+    try {
+      const res = await api<{ items: typeof preview }>("/preview", {
+        method: "POST",
+        body: JSON.stringify({ kind: "posts", limit: 2 }),
+      });
+      setPreview(res.items);
+    } catch (err) {
+      setPreviewError((err as Error).message);
+    } finally {
+      setPreviewing(false);
+    }
+  }
 
   /** Parse + validate the mapping as it is typed, so mistakes surface before a run. */
   const mappingState = useMemo(() => {
@@ -476,6 +497,15 @@ const HomePage = () => {
                 Field mapping
               </Typography>
               <Flex gap={2}>
+                <Button
+                  size="S"
+                  variant="tertiary"
+                  loading={previewing}
+                  disabled={!mappingState.ok}
+                  onClick={runPreview}
+                >
+                  Preview
+                </Button>
                 <Button size="S" variant="tertiary" loading={discovering} onClick={discoverFields}>
                   Read available fields
                 </Button>
@@ -515,6 +545,40 @@ const HomePage = () => {
                 <Alert closeLabel="Close" title="Invalid mapping" variant="danger">
                   {mappingState.issues.join(" · ")}
                 </Alert>
+              </Box>
+            )}
+            {previewError && (
+              <Box paddingTop={2}>
+                <Alert closeLabel="Close" title="Preview failed" variant="danger">
+                  {previewError}
+                </Alert>
+              </Box>
+            )}
+            {preview && (
+              <Box paddingTop={3}>
+                <Typography variant="pi" fontWeight="bold">
+                  What a run would write — nothing is sent
+                </Typography>
+                {preview.map((item) => (
+                  <Box key={item.wpId} paddingTop={2}>
+                    <Typography variant="pi" textColor="neutral600">
+                      #{item.wpId} · {item.slug} → {item.uid}
+                    </Typography>
+                    <Box
+                      padding={2}
+                      background="neutral100"
+                      hasRadius
+                      style={{ fontFamily: "ui-monospace, monospace", fontSize: 11, whiteSpace: "pre-wrap", maxHeight: 220, overflowY: "auto" }}
+                    >
+                      {JSON.stringify(item.data, null, 2)}
+                    </Box>
+                    {item.warnings.map((w, i) => (
+                      <Typography key={i} variant="pi" textColor="warning600">
+                        ⚠ {w}
+                      </Typography>
+                    ))}
+                  </Box>
+                ))}
               </Box>
             )}
             {(wpFields.length > 0 || strapiFields) && (
