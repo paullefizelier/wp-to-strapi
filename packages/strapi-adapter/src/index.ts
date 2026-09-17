@@ -25,7 +25,7 @@ interface UploadService {
   upload: (args: {
     data: { fileInfo?: { name?: string; alternativeText?: string; caption?: string } };
     files: { filepath?: string; originalFilename?: string; mimetype?: string; size?: number; buffer?: Buffer } | { filepath?: string; originalFilename?: string; mimetype?: string; size?: number; buffer?: Buffer }[];
-  }) => Promise<Array<{ id: number; documentId?: string; url: string; name: string; mime: string; width?: number; height?: number }>>;
+  }) => Promise<Array<{ id: number; documentId?: string; url: string; name: string; mime: string; width?: number; height?: number; formats?: Record<string, { url?: string; width?: number } | undefined> | null }>>;
 }
 
 /**
@@ -75,6 +75,7 @@ export class NativeStrapiAdapter implements StrapiAdapter {
       mime: first.mime,
       width: first.width,
       height: first.height,
+      formats: first.formats,
     };
   }
 

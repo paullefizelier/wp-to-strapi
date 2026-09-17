@@ -21,7 +21,11 @@ All three consume the same core engine, emit the same typed `MigratorEvent`s, an
 
 - WordPress REST API source (`/wp-json/wp/v2/`) with pagination.
 - Strapi v5 destination via the Document Service API (entries addressed by `documentId`).
-- Media library migration with automatic URL rewriting in HTML content.
+- Media library migration with automatic URL rewriting in HTML content — size variants
+  (`photo-1024x768.jpg`), `-scaled` originals and image-CDN rewrites (Jetpack/Photon) all
+  resolve back to the right attachment, and `srcset` is rebuilt from Strapi's own formats.
+- **Migration report** — every page built with a page builder, every unexpanded shortcode and
+  every media URL still pointing at WordPress is flagged as a warning during the run.
 - **Idempotent** — writes a `wpId` on each entry so re-runs update instead of duplicating.
 - **Resumable** — persisted state file survives crashes.
 - Typed event bus (`MigratorEvent`) — every front-end subscribes to the same stream.
@@ -87,12 +91,37 @@ CLI and Nuxt UI need a **Full-access API token** in Strapi. The plugin doesn't �
 
 ## How it works
 
-1. **Media first.** The migrator pages through `/wp-json/wp/v2/media`, downloads each binary from `source_url`, and uploads to Strapi's upload plugin. The `wpMediaId → strapiFileId` mapping is persisted.
+1. **Media first.** The migrator pages through `/wp-json/wp/v2/media` (with WP's internal
+   `inherit` status — the media endpoint rejects `publish`), downloads each binary from
+   `source_url`, and uploads to Strapi's upload plugin. The `wpMediaId → strapiFileId` mapping
+   is persisted, along with the responsive formats Strapi generated.
 2. **Articles & pages.** For each entry:
-   - HTML `content` is scanned and every known WP media URL is rewritten to its new Strapi URL.
+   - HTML `content` is scanned and every known WP media URL is rewritten to its new Strapi URL —
+     `src`, `href`, `srcset`, CSS `url(...)` and bare occurrences in text.
    - `featured_media` is attached as the `cover` field.
+   - The content is audited, and anything the REST API could not hand over is reported.
    - A lookup on `wpId` decides between `create` and `update` (upsert).
 3. **Events.** Every step emits a typed `MigratorEvent`. The CLI prints them; both the Nuxt UI and the Strapi plugin stream them as Server-Sent Events for live progress.
+
+## What actually comes across
+
+The engine reads `content.rendered` from `/wp-json/wp/v2/`. That single fact decides most of
+what follows — anything WordPress keeps outside the rendered post content is invisible to it.
+
+| Source site | Result |
+|-------------|--------|
+| **Classic editor** | Clean migration. |
+| **Gutenberg** | Content migrates well, but the HTML keeps `wp-block-*` classes and relies on WP's block stylesheet and `theme.json` variables. Budget for a stylesheet on the Strapi front-end, or parse the blocks into a dynamic zone. |
+| **FSE (full-site editing)** | Page and post *content* migrates. Templates, template parts, navigation, global styles and patterns (`wp_template`, `wp_template_part`, `wp_navigation`, `wp_global_styles`) do **not** — header, footer and site layout are rebuilt on the front-end side. |
+| **Elementor / Divi / WPBakery** | The layout lives in post meta (`_elementor_data` and friends) and is rendered by the builder's own frontend hooks, so the REST API returns an empty or flattened body. The run warns on each such page; plan on rebuilding them. |
+
+Not migrated (by design, for now): categories and tags, authors, menus, custom post types, ACF
+fields, comments, SEO metadata, redirects, and drafts (only `publish` is fetched). See
+[Extending](#extending) for where to hook each of them in.
+
+Media URLs that survive the rewrite — files hosted on another domain, or attachments missing
+from the library — are listed as warnings so they can be dealt with *before* the WordPress
+install is switched off.
 
 ### The adapter pattern
 

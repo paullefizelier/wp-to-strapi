@@ -63,6 +63,11 @@ function wireLogging(m: Migrator): void {
       case "item-error":
         console.warn(`  ✗ ${e.kind} #${e.wpId}: ${e.message}`);
         break;
+      case "log":
+        if (e.level === "error") console.error(`  ! ${e.message}`);
+        else if (e.level === "warn") console.warn(`  ⚠ ${e.message}`);
+        else console.log(`  ${e.message}`);
+        break;
       case "run-end":
         console.log(`\n=== Summary ===`);
         console.log(`  media: ${e.summary.media}`);

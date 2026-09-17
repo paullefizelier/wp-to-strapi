@@ -51,7 +51,13 @@ export class WordPressClient {
     return { body, totalPages, total };
   }
 
-  /** Async-iterate a paginated endpoint. */
+  /**
+   * Async-iterate a paginated endpoint.
+   *
+   * `status` is deliberately left to the caller: post types use `publish`, but attachments
+   * are stored with WP's internal `inherit` status and the media endpoint rejects `publish`
+   * outright (400 rest_forbidden_status).
+   */
   private async *paginate<T>(
     path: string,
     extraQuery: Record<string, string | number | undefined> = {},
@@ -62,8 +68,6 @@ export class WordPressClient {
         ...extraQuery,
         per_page: this.pageSize,
         page,
-        // Include drafts/future if authenticated; ignored otherwise.
-        status: extraQuery.status ?? "publish",
         orderby: "id",
         order: "asc",
       });
@@ -84,15 +88,15 @@ export class WordPressClient {
   }
 
   posts(): AsyncGenerator<WpPost> {
-    return this.paginate<WpPost>("/posts", { _embed: "1" });
+    return this.paginate<WpPost>("/posts", { status: "publish" });
   }
 
   pages(): AsyncGenerator<WpPage> {
-    return this.paginate<WpPage>("/pages", { _embed: "1" });
+    return this.paginate<WpPage>("/pages", { status: "publish" });
   }
 
   media(): AsyncGenerator<WpMedia> {
-    return this.paginate<WpMedia>("/media");
+    return this.paginate<WpMedia>("/media", { status: "inherit" });
   }
 
   async fetchBinary(

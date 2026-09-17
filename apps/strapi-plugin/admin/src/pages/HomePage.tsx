@@ -36,6 +36,7 @@ type MigratorEvent =
   | { type: "item-skip"; kind: Kind; wpId: number; reason: string }
   | { type: "item-ok"; kind: Kind; wpId: number; detail: string }
   | { type: "item-error"; kind: Kind; wpId: number; message: string }
+  | { type: "log"; level: "info" | "warn" | "error"; message: string }
   | { type: "run-end"; at: string; summary: { media: number; posts: number; pages: number } };
 
 const emptySettings: Settings = {
@@ -413,6 +414,7 @@ const HomePage = () => {
                     {e.type === "item-error" && `✗ ${e.kind} #${e.wpId}: ${e.message}`}
                     {e.type === "section-start" && `▶ ${e.kind}`}
                     {e.type === "section-end" && `■ ${e.kind} (${e.total})`}
+                    {e.type === "log" && `${e.level === "info" ? "ℹ" : "⚠"} ${e.message}`}
                   </div>
                 ))}
               </Box>

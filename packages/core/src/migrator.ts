@@ -2,12 +2,25 @@ import { EventEmitter } from "node:events";
 import { basename } from "node:path";
 import pLimit from "p-limit";
 import type { AppConfig } from "./config.js";
-import { decodeEntities, rewriteMediaUrls } from "./html-transform.js";
-import { StateStore } from "./state.js";
+import {
+  decodeEntities,
+  detectFlavour,
+  findShortcodes,
+  findUnresolvedMediaUrls,
+  rewriteMediaUrls,
+} from "./html-transform.js";
+import { StateStore, type MediaFormat } from "./state.js";
 import type { StrapiAdapter } from "./strapi-adapter.js";
 import { StrapiClient } from "./strapi-client.js";
-import type { WpMedia, WpPage, WpPost } from "./types.js";
+import type { StrapiUploadFile, WpMedia, WpPage, WpPost } from "./types.js";
 import { WordPressClient } from "./wordpress-client.js";
+
+/** Keep the responsive variants Strapi generated so `srcset` can be rebuilt on the way out. */
+function toMediaFormats(file: StrapiUploadFile): MediaFormat[] {
+  return Object.values(file.formats ?? {})
+    .flatMap((f) => (f?.url && f.width ? [{ url: f.url, width: f.width }] : []))
+    .sort((a, b) => a.width - b.width);
+}
 
 export type Kind = "media" | "posts" | "pages";
 
@@ -136,7 +149,13 @@ export class Migrator extends EventEmitter {
         alternativeText: m.alt_text || decodeEntities(m.title?.rendered ?? ""),
         caption: decodeEntities(m.caption?.rendered ?? ""),
       });
-      this.state.setMedia(m.id, uploaded.id, uploaded.url, m.source_url);
+      this.state.setMedia(
+        m.id,
+        uploaded.id,
+        uploaded.url,
+        m.source_url,
+        toMediaFormats(uploaded),
+      );
       await this.state.persist();
       this.fire({ type: "item-ok", kind: "media", wpId: m.id, detail: uploaded.url });
     } catch (err) {
@@ -175,13 +194,13 @@ export class Migrator extends EventEmitter {
     this.fire({ type: "section-end", kind: "pages", total: count });
   }
 
-  private buildEntryData(p: WpPost | WpPage): Record<string, unknown> {
+  private buildEntryData(p: WpPost | WpPage): {
+    data: Record<string, unknown>;
+    warnings: string[];
+  } {
     const title = decodeEntities(p.title?.rendered ?? "").trim();
-    const content = rewriteMediaUrls(
-      p.content?.rendered ?? "",
-      this.state.get(),
-      this.cfg.strapi.baseUrl,
-    );
+    const rendered = p.content?.rendered ?? "";
+    const content = rewriteMediaUrls(rendered, this.state.get(), this.cfg.strapi.baseUrl);
     const excerpt = decodeEntities(p.excerpt?.rendered ?? "");
     const featured = p.featured_media
       ? this.state.get().media[p.featured_media]
@@ -196,7 +215,48 @@ export class Migrator extends EventEmitter {
       publishedAt: p.status === "publish" ? p.date_gmt + "Z" : null,
     };
     if (featured) data.cover = featured.strapiId;
-    return data;
+    return { data, warnings: this.auditContent(p, rendered, content) };
+  }
+
+  /**
+   * Flag what the REST API could not hand over: page-builder layouts living in post meta,
+   * unexpanded shortcodes, and media still pointing at WordPress. Silent blanks are the
+   * failure mode that bites weeks later, once the WP install is gone.
+   */
+  private auditContent(
+    p: WpPost | WpPage,
+    rendered: string,
+    rewritten: string,
+  ): string[] {
+    const label = `${p.type ?? "entry"} "${p.slug}" (wpId ${p.id})`;
+    const warnings: string[] = [];
+
+    const flavour = detectFlavour(rendered);
+    if (flavour === "empty") {
+      warnings.push(`${label}: WordPress returned empty rendered content — nothing to import`);
+    } else if (flavour === "elementor" || flavour === "divi" || flavour === "wpbakery") {
+      warnings.push(
+        `${label}: built with ${flavour} — the layout lives in post meta, so only the flattened ` +
+          `REST output is migrated. Expect to rebuild this page.`,
+      );
+    }
+
+    const shortcodes = findShortcodes(rendered);
+    if (shortcodes.length > 0) {
+      warnings.push(
+        `${label}: ${shortcodes.length} unexpanded shortcode(s) kept as literal text: ` +
+          shortcodes.slice(0, 5).map((t) => `[${t}]`).join(" "),
+      );
+    }
+
+    const unresolved = findUnresolvedMediaUrls(rewritten, this.cfg.wp.baseUrl);
+    if (unresolved.length > 0) {
+      warnings.push(
+        `${label}: ${unresolved.length} media URL(s) still point at WordPress ` +
+          `(missing from the media map): ${unresolved.slice(0, 3).join(", ")}`,
+      );
+    }
+    return warnings;
   }
 
   private async upsertEntry(
@@ -204,7 +264,8 @@ export class Migrator extends EventEmitter {
     p: WpPost | WpPage,
     pluralOverride?: string,
   ): Promise<{ documentId: string }> {
-    const data = this.buildEntryData(p);
+    const { data, warnings } = this.buildEntryData(p);
+    for (const message of warnings) this.fire({ type: "log", level: "warn", message });
     if (this.cfg.dryRun) {
       return { documentId: "dry-run" };
     }

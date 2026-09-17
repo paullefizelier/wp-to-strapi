@@ -153,6 +153,15 @@ const statusColor = computed<"gray" | "blue" | "green" | "red">(() =>
             <template v-else-if="e.type === 'item-error'">
               <span class="text-red-600 dark:text-red-400">✗ {{ e.kind }} #{{ e.wpId }}: {{ e.message }}</span>
             </template>
+            <template v-else-if="e.type === 'log'">
+              <span
+                :class="{
+                  'text-amber-600 dark:text-amber-400': e.level === 'warn',
+                  'text-red-600 dark:text-red-400': e.level === 'error',
+                  'text-gray-500': e.level === 'info',
+                }"
+              >{{ e.level === 'info' ? 'ℹ' : '⚠' }} {{ e.message }}</span>
+            </template>
             <template v-else-if="e.type === 'run-start'">
               <span class="text-gray-500">— début {{ e.at }} ({{ e.kinds.join(", ") }})</span>
             </template>

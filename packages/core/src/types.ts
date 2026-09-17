@@ -47,6 +47,8 @@ export interface WpMedia {
     height?: number;
     file?: string;
     filesize?: number;
+    /** WP's generated variants (thumbnail, medium, large…), keyed by size name. */
+    sizes?: Record<string, { file?: string; width?: number; height?: number; source_url?: string }>;
   };
 }
 
@@ -58,6 +60,8 @@ export interface StrapiUploadFile {
   mime: string;
   width?: number;
   height?: number;
+  /** Responsive variants Strapi generated for images (thumbnail, small, medium, large). */
+  formats?: Record<string, { url?: string; width?: number } | undefined> | null;
 }
 
 export interface StrapiEntry {
