@@ -181,3 +181,38 @@ describe("validateMapping", () => {
     ]);
   });
 });
+
+describe("select/enumeration targets", () => {
+  it("writes a fixed enumeration value on every entry", () => {
+    const { data } = applyMapping(
+      entity,
+      [
+        { target: "audience", value: "professionnels" },
+        { target: "wpId", source: "id" },
+      ],
+      ctx,
+    );
+    expect(data).toEqual({ audience: "professionnels", wpId: 42 });
+  });
+
+  it("coerces constants typed in a UI, which always arrive as strings", () => {
+    const { data } = applyMapping(
+      entity,
+      [
+        { target: "priorite", value: "3", transforms: ["number"] },
+        { target: "miseEnAvant", value: "true", transforms: ["boolean"] },
+      ],
+      ctx,
+    );
+    expect(data).toEqual({ priorite: 3, miseEnAvant: true });
+  });
+
+  it("can derive the value from WordPress instead of fixing it", () => {
+    const { data } = applyMapping(
+      entity,
+      [{ target: "audience", source: "acf.subtitle", transforms: ["slugify", "default:grand-public"] }],
+      ctx,
+    );
+    expect(data.audience).toBe("un-sous-titre");
+  });
+});

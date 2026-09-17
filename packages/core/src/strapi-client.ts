@@ -126,7 +126,14 @@ export class StrapiClient {
   async describeTarget(uid: string, pluralOverride?: string): Promise<TargetSchema> {
     try {
       const schema = await this.json<{
-        data?: { schema?: { attributes?: Record<string, { type?: string; required?: boolean; target?: string }> } };
+        data?: {
+          schema?: {
+            attributes?: Record<
+              string,
+              { type?: string; required?: boolean; target?: string; enum?: string[] }
+            >;
+          };
+        };
       }>("GET", `/content-type-builder/content-types/${encodeURIComponent(uid)}`);
       const attributes = schema.data?.schema?.attributes;
       if (attributes && Object.keys(attributes).length > 0) {
@@ -138,6 +145,7 @@ export class StrapiClient {
             type: a.type,
             required: a.required,
             target: a.target,
+            options: a.enum,
           })),
         };
       }

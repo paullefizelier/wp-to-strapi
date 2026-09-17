@@ -154,6 +154,13 @@ you leave out keep the built-in behaviour, so an empty mapping changes nothing.
 | References | `rewriteMedia` `mediaId` `mediaUrl` `terms:categories` `terms:tags` |
 | Values | `date` `number` `boolean` `string` `first` `default:fallback` |
 
+**Select / enumeration fields** take a constant like any other target:
+`{ "target": "audience", "value": "professionnels" }` on the `post` rows sets it on every
+imported article, or put it in `common` to set it everywhere. The value must be one of the
+enumeration's declared values — discovery lists them next to the field name, and the UI offers
+them in the value box. Constants typed in a UI arrive as strings, so a number or boolean field
+needs the matching transform: `{ "target": "priorite", "value": "3", "transforms": ["number"] }`.
+
 `omitEmpty: true` drops the field instead of writing an empty value. A mapping is validated
 before the run starts: an unknown transform or a row with neither a source nor a value aborts
 it rather than importing something wrong.

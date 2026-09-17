@@ -78,6 +78,15 @@ const rows = computed<FieldMapping[]>({
 });
 
 const issues = computed(() => validateMapping(rows.value));
+
+/** Enumeration fields discovered on the Strapi side, so a constant can be picked, not typed. */
+const enumOptions = computed<Record<string, string[]>>(() =>
+  Object.fromEntries(
+    (targetSchema.value?.fields ?? [])
+      .filter((f) => (f.options ?? []).length > 0)
+      .map((f) => [f.name, f.options as string[]]),
+  ),
+);
 const transformNames = Object.keys(TRANSFORMS);
 
 const sourceFields = ref<SourceField[]>([]);
@@ -212,8 +221,11 @@ function setTransforms(index: number, text: string) {
       </datalist>
       <datalist id="strapi-targets">
         <option v-for="f in targetSchema?.fields ?? []" :key="f.name" :value="f.name">
-          {{ f.type }}{{ f.required ? " (requis)" : "" }}
+          {{ f.type }}{{ f.required ? " (requis)" : "" }}{{ f.options?.length ? ` — ${f.options.join(" | ")}` : "" }}
         </option>
+      </datalist>
+      <datalist v-for="(values, field) in enumOptions" :id="`enum-${field}`" :key="field">
+        <option v-for="v in values" :key="v" :value="v" />
       </datalist>
       <datalist id="transform-names">
         <option v-for="name in transformNames" :key="name" :value="name" />
@@ -261,7 +273,8 @@ function setTransforms(index: number, text: string) {
             v-else
             class="md:col-span-3"
             :model-value="String(row.value ?? '')"
-            placeholder="fr"
+            :placeholder="enumOptions[row.target]?.[0] ?? 'fr'"
+            :list="enumOptions[row.target] ? `enum-${row.target}` : undefined"
             @update:model-value="(v: string) => patchRow(i, { value: v })"
           />
           <UInput

@@ -15,6 +15,8 @@ export interface TargetField {
   required?: boolean;
   /** Related content-type or allowed media types, when known. */
   target?: string;
+  /** Allowed values of an enumeration field — what a select will accept. */
+  options?: string[];
 }
 
 export interface TargetSchema {

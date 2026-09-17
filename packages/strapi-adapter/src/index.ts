@@ -22,7 +22,10 @@ export interface StrapiLike {
   };
   /** Present on the Strapi global; used to read a content-type's real schema. */
   contentType?: (uid: string) => {
-    attributes?: Record<string, { type?: string; required?: boolean; target?: string }>;
+    attributes?: Record<
+      string,
+      { type?: string; required?: boolean; target?: string; enum?: string[] }
+    >;
   } | undefined;
 }
 
@@ -98,6 +101,7 @@ export class NativeStrapiAdapter implements StrapiAdapter {
         type: a.type,
         required: a.required,
         target: a.target,
+        options: a.enum,
       })),
     };
   }
