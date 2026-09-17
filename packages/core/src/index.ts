@@ -14,6 +14,8 @@ export {
   rewriteMediaUrls,
 } from "./html-transform.js";
 export type { ContentFlavour, MediaIndex, MediaTarget } from "./html-transform.js";
+export { extractReadableContent } from "./content-extract.js";
+export type { ExtractedContent } from "./content-extract.js";
 export { StateStore } from "./state.js";
 export type { MediaFormat, MigrationState } from "./state.js";
 export type { WpMedia, WpPage, WpPost, StrapiEntry, StrapiUploadFile } from "./types.js";

@@ -99,6 +99,26 @@ export class WordPressClient {
     return this.paginate<WpMedia>("/media", { status: "inherit" });
   }
 
+  /**
+   * Fetch a public page as HTML. Used to recover content the REST API cannot render —
+   * page builders keep their layout in post meta and only emit it on the front end.
+   */
+  async fetchPage(url: string): Promise<string> {
+    const res = await request(url, {
+      method: "GET",
+      maxRedirections: 3,
+      headers: {
+        Accept: "text/html",
+        "User-Agent": "wp-to-strapi/0.1",
+        ...(this.authHeader ? { Authorization: this.authHeader } : {}),
+      },
+    });
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw new Error(`WP GET ${url} failed: ${res.statusCode}`);
+    }
+    return res.body.text();
+  }
+
   async fetchBinary(
     url: string,
   ): Promise<{ buffer: Buffer; contentType: string }> {

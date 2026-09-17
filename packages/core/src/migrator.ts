@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { basename } from "node:path";
 import pLimit from "p-limit";
 import type { AppConfig } from "./config.js";
+import { extractReadableContent } from "./content-extract.js";
 import {
   decodeEntities,
   detectFlavour,
@@ -194,12 +195,56 @@ export class Migrator extends EventEmitter {
     this.fire({ type: "section-end", kind: "pages", total: count });
   }
 
-  private buildEntryData(p: WpPost | WpPage): {
+  /**
+   * Recover content the REST API could not render. Page builders (Elementor, Divi, WPBakery)
+   * and FSE templates only emit their markup on the front end, so the public page is fetched
+   * and stripped down to text and images. Used only when it beats what REST returned.
+   */
+  private async resolveContent(p: WpPost | WpPage): Promise<{
+    html: string;
+    warnings: string[];
+  }> {
+    const rendered = p.content?.rendered ?? "";
+    const flavour = detectFlavour(rendered);
+    const needsFallback =
+      flavour === "empty" || flavour === "elementor" || flavour === "divi" || flavour === "wpbakery";
+    if (!this.cfg.htmlFallback || !needsFallback || !p.link) return { html: rendered, warnings: [] };
+
+    const label = `${p.type ?? "entry"} "${p.slug}" (wpId ${p.id})`;
+    try {
+      const page = await this.wp.fetchPage(p.link);
+      const extracted = extractReadableContent(page, p.link);
+      const renderedText = rendered.replace(/<[^>]*>/g, "").trim().length;
+      if (extracted.textLength <= renderedText || extracted.textLength === 0) {
+        return { html: rendered, warnings: [] };
+      }
+      const warnings = [
+        `${label}: ${flavour === "empty" ? "empty REST body" : `${flavour} layout`} — ` +
+          `recovered ${extracted.textLength} chars of text and images from ${p.link}. ` +
+          `Layout and styling are not migrated.`,
+      ];
+      if (extracted.droppedEmbeds > 0) {
+        warnings.push(
+          `${label}: ${extracted.droppedEmbeds} embed(s) (iframe/video/audio) dropped from the ` +
+            `recovered content — re-add them by hand if they matter.`,
+        );
+      }
+      return { html: extracted.html, warnings };
+    } catch (err) {
+      return {
+        html: rendered,
+        warnings: [`${label}: could not fetch ${p.link} for fallback: ${(err as Error).message}`],
+      };
+    }
+  }
+
+  private async buildEntryData(p: WpPost | WpPage): Promise<{
     data: Record<string, unknown>;
     warnings: string[];
-  } {
+  }> {
     const title = decodeEntities(p.title?.rendered ?? "").trim();
-    const rendered = p.content?.rendered ?? "";
+    const resolved = await this.resolveContent(p);
+    const rendered = resolved.html;
     const content = rewriteMediaUrls(rendered, this.state.get(), this.cfg.strapi.baseUrl);
     const excerpt = decodeEntities(p.excerpt?.rendered ?? "");
     const featured = p.featured_media
@@ -215,7 +260,10 @@ export class Migrator extends EventEmitter {
       publishedAt: p.status === "publish" ? p.date_gmt + "Z" : null,
     };
     if (featured) data.cover = featured.strapiId;
-    return { data, warnings: this.auditContent(p, rendered, content) };
+    return {
+      data,
+      warnings: [...resolved.warnings, ...this.auditContent(p, rendered, content)],
+    };
   }
 
   /**
@@ -264,7 +312,7 @@ export class Migrator extends EventEmitter {
     p: WpPost | WpPage,
     pluralOverride?: string,
   ): Promise<{ documentId: string }> {
-    const { data, warnings } = this.buildEntryData(p);
+    const { data, warnings } = await this.buildEntryData(p);
     for (const message of warnings) this.fire({ type: "log", level: "warn", message });
     if (this.cfg.dryRun) {
       return { documentId: "dry-run" };

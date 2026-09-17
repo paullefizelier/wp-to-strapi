@@ -1,7 +1,7 @@
 {
   "name": "@paullefizelier/wp-to-strapi-core",
   "version": "0.1.0",
-  "description": "WordPress \u2192 Strapi v5 migration core (clients, orchestrator, events)",
+  "description": "WordPress → Strapi v5 migration core (clients, orchestrator, events)",
   "license": "MIT",
   "author": "",
   "repository": {
@@ -45,6 +45,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "node-html-parser": "^6.1.13",
     "p-limit": "^5.0.0",
     "undici": "^6.19.8"
   },

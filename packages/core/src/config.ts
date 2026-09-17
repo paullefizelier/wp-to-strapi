@@ -25,9 +25,15 @@ export interface AppConfig {
   pageSize: number;
   stateFile: string;
   dryRun: boolean;
+  /**
+   * When the REST body is empty or comes from a page builder, scrape the public page and keep
+   * its text and images. Off means those entries import as WordPress returned them.
+   */
+  htmlFallback: boolean;
 }
 
 export const defaults = {
+  htmlFallback: true,
   concurrency: 4,
   pageSize: 100,
   stateFile: "./.migration-state.json",
@@ -44,6 +50,7 @@ export function buildConfig(input: {
   pageSize?: number;
   stateFile?: string;
   dryRun?: boolean;
+  htmlFallback?: boolean;
 }): AppConfig {
   return {
     wp: {
@@ -63,5 +70,6 @@ export function buildConfig(input: {
     pageSize: input.pageSize ?? defaults.pageSize,
     stateFile: input.stateFile ?? defaults.stateFile,
     dryRun: input.dryRun ?? defaults.dryRun,
+    htmlFallback: input.htmlFallback ?? defaults.htmlFallback,
   };
 }
