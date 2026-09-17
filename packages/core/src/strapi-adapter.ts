@@ -1,3 +1,4 @@
+import type { TargetSchema } from "./introspect.js";
 import type { StrapiEntry, StrapiUploadFile } from "./types.js";
 
 /**
@@ -36,4 +37,11 @@ export interface StrapiAdapter {
     data: T,
     pluralOverride?: string,
   ): Promise<StrapiEntry>;
+
+  /**
+   * List the fields of a target content-type, to drive the mapping UI. Optional: an adapter
+   * that cannot introspect its destination simply omits it, and callers fall back to typing
+   * field names.
+   */
+  describeTarget?(uid: string, pluralOverride?: string): Promise<TargetSchema>;
 }

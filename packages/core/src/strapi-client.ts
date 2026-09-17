@@ -1,4 +1,5 @@
 import { request, FormData, type Dispatcher } from "undici";
+import type { TargetField, TargetSchema } from "./introspect.js";
 import type { StrapiEntry, StrapiUploadFile } from "./types.js";
 
 type HttpMethod = Dispatcher.HttpMethod;
@@ -112,6 +113,62 @@ export class StrapiClient {
     const arr = (await res.body.json()) as StrapiUploadFile[];
     if (!arr[0]) throw new Error("Strapi upload returned empty array");
     return arr[0];
+  }
+
+  /**
+   * Describe a target content-type.
+   *
+   * Strapi v5 only exposes schemas through the admin API, which an API token cannot reach, so
+   * this tries the Content-Type Builder first and otherwise infers the shape from an existing
+   * entry. Inference misses fields that entry left empty — hence the `source` flag, so the UI
+   * can say how much to trust the list.
+   */
+  async describeTarget(uid: string, pluralOverride?: string): Promise<TargetSchema> {
+    try {
+      const schema = await this.json<{
+        data?: { schema?: { attributes?: Record<string, { type?: string; required?: boolean; target?: string }> } };
+      }>("GET", `/content-type-builder/content-types/${encodeURIComponent(uid)}`);
+      const attributes = schema.data?.schema?.attributes;
+      if (attributes && Object.keys(attributes).length > 0) {
+        return {
+          uid,
+          source: "schema",
+          fields: Object.entries(attributes).map(([name, a]) => ({
+            name,
+            type: a.type,
+            required: a.required,
+            target: a.target,
+          })),
+        };
+      }
+    } catch {
+      // Expected with an API token: the Content-Type Builder is admin-only.
+    }
+
+    try {
+      const path = `${this.collectionUrl(uid, pluralOverride)}?pagination[pageSize]=1&status=draft`;
+      const sample = await this.json<{ data?: Array<Record<string, unknown>> }>("GET", path);
+      const entry = sample.data?.[0];
+      if (entry) {
+        const fields: TargetField[] = Object.entries(entry)
+          .filter(([name]) => !["id", "documentId", "createdAt", "updatedAt"].includes(name))
+          .map(([name, value]) => ({ name, type: typeof value === "object" && value !== null ? "relation" : typeof value }));
+        return {
+          uid,
+          source: "sample",
+          fields,
+          note: "Inferred from an existing entry — fields left empty on it are missing.",
+        };
+      }
+      return {
+        uid,
+        source: "none",
+        fields: [],
+        note: "No entry to infer from yet. Type the Strapi field names by hand.",
+      };
+    } catch (err) {
+      return { uid, source: "none", fields: [], note: (err as Error).message };
+    }
   }
 
   /** Look up an entry by a unique field (e.g., slug or an external id) via filters. */

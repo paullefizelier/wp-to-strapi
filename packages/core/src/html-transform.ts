@@ -1,4 +1,6 @@
-import { decode } from "he";
+// `he` is CommonJS: a named import of `decode` fails under Node's ESM loader, even though
+// bundlers paper over it. The default import is the interop-safe form.
+import he from "he";
 
 import type { MigrationState } from "./state.js";
 
@@ -251,5 +253,5 @@ export function findShortcodes(html: string): string[] {
  * matters here — accented content is exactly what a hand-picked list of smart quotes misses.
  */
 export function decodeEntities(s: string): string {
-  return decode(s ?? "");
+  return he.decode(s ?? "");
 }

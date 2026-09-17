@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import "dotenv/config";
+import { readFileSync } from "node:fs";
 import {
   buildConfig,
   Migrator,
   type CustomTypeConfig,
   type Kind,
   type MigrateOptions,
+  type MappingSet,
   type MigratorEvent,
 } from "@paullefizelier/wp-to-strapi-core";
 
@@ -43,6 +45,22 @@ function parseCustomTypes(value: string | undefined): CustomTypeConfig[] {
   });
 }
 
+/** MAPPING_FILE=./mapping.json — the same JSON shape both UIs edit. */
+function loadMapping(path: string | undefined): MappingSet | undefined {
+  if (!path) return undefined;
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (err) {
+    throw new Error(`Cannot read MAPPING_FILE "${path}": ${(err as Error).message}`);
+  }
+  try {
+    return JSON.parse(raw) as MappingSet;
+  } catch (err) {
+    throw new Error(`MAPPING_FILE "${path}" is not valid JSON: ${(err as Error).message}`);
+  }
+}
+
 function loadConfigFromEnv() {
   return buildConfig({
     wp: {
@@ -67,6 +85,7 @@ function loadConfigFromEnv() {
     htmlFallback: (process.env.HTML_FALLBACK || "true").toLowerCase() !== "false",
     statuses: splitList(process.env.WP_STATUSES) ?? undefined,
     customTypes: parseCustomTypes(process.env.WP_CUSTOM_TYPES),
+    mapping: loadMapping(process.env.MAPPING_FILE),
   });
 }
 

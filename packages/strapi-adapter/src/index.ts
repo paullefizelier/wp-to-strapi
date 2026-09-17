@@ -2,6 +2,7 @@ import type {
   StrapiAdapter,
   StrapiEntry,
   StrapiUploadFile,
+  TargetSchema,
 } from "@paullefizelier/wp-to-strapi-core";
 
 /**
@@ -19,6 +20,10 @@ export interface StrapiLike {
   plugin: (name: string) => {
     service: (name: string) => unknown;
   };
+  /** Present on the Strapi global; used to read a content-type's real schema. */
+  contentType?: (uid: string) => {
+    attributes?: Record<string, { type?: string; required?: boolean; target?: string }>;
+  } | undefined;
 }
 
 interface UploadService {
@@ -76,6 +81,24 @@ export class NativeStrapiAdapter implements StrapiAdapter {
       width: first.width,
       height: first.height,
       formats: first.formats,
+    };
+  }
+
+  /** In-process, the real schema is right there — no guessing from a sample entry. */
+  async describeTarget(uid: string): Promise<TargetSchema> {
+    const attributes = this.strapi.contentType?.(uid)?.attributes;
+    if (!attributes) {
+      return { uid, source: "none", fields: [], note: `Unknown content-type "${uid}"` };
+    }
+    return {
+      uid,
+      source: "schema",
+      fields: Object.entries(attributes).map(([name, a]) => ({
+        name,
+        type: a.type,
+        required: a.required,
+        target: a.target,
+      })),
     };
   }
 

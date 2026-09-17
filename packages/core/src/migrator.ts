@@ -10,6 +10,14 @@ import {
   findUnresolvedMediaUrls,
   rewriteMediaUrls,
 } from "./html-transform.js";
+import {
+  applyMapping,
+  defaultEntryMapping,
+  defaultTermMapping,
+  mergeMappings,
+  validateMapping,
+  type FieldMapping,
+} from "./mapping.js";
 import { StateStore, type MediaFormat } from "./state.js";
 import type { StrapiAdapter } from "./strapi-adapter.js";
 import { StrapiClient } from "./strapi-client.js";
@@ -96,6 +104,41 @@ export class Migrator extends EventEmitter {
     this.emit("event", e);
   }
 
+  /**
+   * Rows for one kind: the configured mapping if there is one, the built-in otherwise, with
+   * the `common` rows merged underneath so a shared field lands on every entry.
+   */
+  private mappingFor(
+    kind: "post" | "page" | "category" | "tag",
+    restBase?: string,
+  ): FieldMapping[] {
+    const set = this.cfg.mapping ?? {};
+    const isTerm = kind === "category" || kind === "tag";
+    const configured = restBase ? (set.custom?.[restBase] ?? set.post) : set[kind];
+    return mergeMappings(set.common, configured ?? (isTerm ? defaultTermMapping() : defaultEntryMapping()));
+  }
+
+  /** Fail on a broken mapping before writing anything, not entry by entry. */
+  private assertMappingValid(): void {
+    const sets: Array<[string, FieldMapping[] | undefined]> = [
+      ["common", this.cfg.mapping?.common],
+      ["post", this.cfg.mapping?.post],
+      ["page", this.cfg.mapping?.page],
+      ["category", this.cfg.mapping?.category],
+      ["tag", this.cfg.mapping?.tag],
+      ...Object.entries(this.cfg.mapping?.custom ?? {}).map(
+        ([restBase, rows]) => [`custom.${restBase}`, rows] as [string, FieldMapping[]],
+      ),
+    ];
+    const problems = sets.flatMap(([name, rows]) =>
+      rows ? validateMapping(rows).map((i) => `${name}.${i.target || "?"}: ${i.message}`) : [],
+    );
+    if (problems.length > 0) {
+      for (const message of problems) this.fire({ type: "log", level: "error", message });
+      throw new Error(`Invalid field mapping: ${problems.join("; ")}`);
+    }
+  }
+
   /** Everything this configuration can migrate, in dependency order. */
   private configuredKinds(): Kind[] {
     const kinds: Kind[] = ["media"];
@@ -107,6 +150,7 @@ export class Migrator extends EventEmitter {
   }
 
   async run(opts: MigrateOptions = {}): Promise<void> {
+    this.assertMappingValid();
     await this.state.load();
     const configured = this.configuredKinds();
     const kinds = opts.only ? configured.filter((k) => opts.only?.includes(k)) : configured;
@@ -177,12 +221,12 @@ export class Migrator extends EventEmitter {
     pluralOverride?: string,
   ): Promise<void> {
     try {
-      const data: Record<string, unknown> = {
-        name: decodeEntities(term.name ?? "").trim(),
-        slug: term.slug,
-        description: decodeEntities(term.description ?? ""),
-        wpId: term.id,
-      };
+      const mapped = applyMapping(term, this.mappingFor(kind === "tags" ? "tag" : "category"), {
+        state: this.state.get(),
+        strapiBaseUrl: this.cfg.strapi.baseUrl,
+      });
+      for (const message of mapped.warnings) this.fire({ type: "log", level: "warn", message });
+      const data = mapped.data;
       if (this.cfg.dryRun) {
         this.fire({ type: "item-ok", kind, wpId: term.id, detail: `[dry-run] ${term.slug}` });
         return;
@@ -225,7 +269,7 @@ export class Migrator extends EventEmitter {
 
   private async migrateOneCustom(p: WpPost, type: CustomTypeConfig): Promise<void> {
     try {
-      const { documentId } = await this.upsertEntry(type.uid, p, type.pluralPath);
+      const { documentId } = await this.upsertEntry(type.uid, p, type.pluralPath, "post", type.restBase);
       this.state.setCustom(type.restBase, p.id, documentId);
       await this.state.persist();
       this.fire({
@@ -370,46 +414,29 @@ export class Migrator extends EventEmitter {
     }
   }
 
-  private async buildEntryData(p: WpPost | WpPage): Promise<{
-    data: Record<string, unknown>;
-    warnings: string[];
-  }> {
-    const title = decodeEntities(p.title?.rendered ?? "").trim();
+  private async buildEntryData(
+    p: WpPost | WpPage,
+    kind: "post" | "page",
+    restBase?: string,
+  ): Promise<{ data: Record<string, unknown>; warnings: string[] }> {
     const resolved = await this.resolveContent(p);
-    const rendered = resolved.html;
-    const content = rewriteMediaUrls(rendered, this.state.get(), this.cfg.strapi.baseUrl);
-    const excerpt = decodeEntities(p.excerpt?.rendered ?? "");
-    const featured = p.featured_media
-      ? this.state.get().media[p.featured_media]
-      : undefined;
-
-    const data: Record<string, unknown> = {
-      title,
-      slug: p.slug,
-      content,
-      excerpt,
-      wpId: p.id,
-      publishedAt: p.status === "publish" ? p.date_gmt + "Z" : null,
-    };
-    if (featured) data.cover = featured.strapiId;
-
     const state = this.state.get();
-    if (this.cfg.strapi.categoryUid) {
-      const ids = (p.categories ?? [])
-        .map((wpId) => state.categories[wpId]?.documentId)
-        .filter((id): id is string => Boolean(id));
-      if (ids.length > 0) data[this.cfg.strapi.categoryField] = ids;
-    }
-    if (this.cfg.strapi.tagUid) {
-      const ids = (p.tags ?? [])
-        .map((wpId) => state.tags[wpId]?.documentId)
-        .filter((id): id is string => Boolean(id));
-      if (ids.length > 0) data[this.cfg.strapi.tagField] = ids;
-    }
+    const mapped = applyMapping(p, this.mappingFor(kind, restBase), {
+      state,
+      strapiBaseUrl: this.cfg.strapi.baseUrl,
+      virtuals: {
+        // Values the engine computed rather than ones WordPress sent.
+        $content: resolved.html,
+        $publishedAt: p.status === "publish" ? `${p.date_gmt}Z` : null,
+        $link: p.link,
+        $status: p.status,
+      },
+    });
 
+    const rewritten = rewriteMediaUrls(resolved.html, state, this.cfg.strapi.baseUrl);
     return {
-      data,
-      warnings: [...resolved.warnings, ...this.auditContent(p, rendered, content)],
+      data: mapped.data,
+      warnings: [...resolved.warnings, ...mapped.warnings, ...this.auditContent(p, resolved.html, rewritten)],
     };
   }
 
@@ -472,8 +499,10 @@ export class Migrator extends EventEmitter {
     uid: string,
     p: WpPost | WpPage,
     pluralOverride?: string,
+    kind: "post" | "page" = "post",
+    restBase?: string,
   ): Promise<{ documentId: string }> {
-    const { data, warnings } = await this.buildEntryData(p);
+    const { data, warnings } = await this.buildEntryData(p, kind, restBase);
     for (const message of warnings) this.fire({ type: "log", level: "warn", message });
     if (this.cfg.dryRun) {
       return { documentId: "dry-run" };
@@ -513,6 +542,7 @@ export class Migrator extends EventEmitter {
         this.cfg.strapi.pageUid,
         p,
         this.cfg.strapi.pagePluralPath,
+        "page",
       );
       this.state.setPage(p.id, documentId);
       await this.state.persist();

@@ -1,3 +1,5 @@
+import type { MappingSet } from "./mapping.js";
+
 /**
  * AppConfig is the single shape both the CLI and the web UI pass to the Migrator.
  * No filesystem/env coupling here — callers are responsible for loading values.
@@ -56,6 +58,12 @@ export interface AppConfig {
   statuses: string[];
   /** Custom post types to migrate alongside posts and pages. */
   customTypes: CustomTypeConfig[];
+  /**
+   * Field mapping. A kind's rows replace the built-in mapping entirely, so what you configure
+   * is what gets written; `common` rows are merged underneath every kind. Omit for the
+   * built-in behaviour.
+   */
+  mapping: MappingSet;
 }
 
 export const DRAFT_STATUSES = ["draft", "pending", "future", "private"] as const;
@@ -84,6 +92,7 @@ export function buildConfig(input: {
   htmlFallback?: boolean;
   statuses?: string[];
   customTypes?: CustomTypeConfig[];
+  mapping?: MappingSet;
 }): AppConfig {
   return {
     wp: {
@@ -113,5 +122,6 @@ export function buildConfig(input: {
     statuses:
       input.statuses && input.statuses.length > 0 ? [...input.statuses] : [...defaults.statuses],
     customTypes: input.customTypes ? [...input.customTypes] : [],
+    mapping: input.mapping ?? {},
   };
 }

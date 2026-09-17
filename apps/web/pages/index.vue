@@ -223,6 +223,8 @@ const canStart = computed(() => {
       </div>
     </UCard>
 
+    <FieldMapper />
+
     <UCard>
       <template #header>
         <h2 class="text-lg font-semibold">Options</h2>

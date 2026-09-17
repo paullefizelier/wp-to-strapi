@@ -14,6 +14,15 @@ import {
   Typography,
 } from "@strapi/design-system";
 import { Play, Check } from "@strapi/icons";
+import {
+  defaultEntryMapping,
+  defaultTermMapping,
+  validateMapping,
+  TRANSFORMS,
+  type FieldMapping,
+  type SourceField,
+  type TargetSchema,
+} from "@paullefizelier/wp-to-strapi-core/mapping";
 import { api, eventsUrl } from "../api";
 import pluginId from "../pluginId";
 
@@ -31,6 +40,7 @@ interface Settings {
   statuses: string[];
   customTypes: string[];
   htmlFallback: boolean;
+  mapping: string;
   pageUid: string;
   concurrency: number;
   pageSize: number;
@@ -56,6 +66,7 @@ const emptySettings: Settings = {
   statuses: ["publish"],
   customTypes: [],
   htmlFallback: true,
+  mapping: "",
   pageUid: "api::page.page",
   concurrency: 4,
   pageSize: 100,
@@ -72,6 +83,56 @@ const HomePage = () => {
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [starting, setStarting] = useState(false);
   const [only, setOnly] = useState<Kind[]>(["media", "posts", "pages"]);
+  const [wpFields, setWpFields] = useState<SourceField[]>([]);
+  const [strapiFields, setStrapiFields] = useState<TargetSchema | null>(null);
+  const [discovering, setDiscovering] = useState(false);
+
+  /** Parse + validate the mapping as it is typed, so mistakes surface before a run. */
+  const mappingState = useMemo(() => {
+    const text = settings.mapping?.trim();
+    if (!text) return { ok: true as const, issues: [] as string[] };
+    let parsed: Record<string, FieldMapping[]>;
+    try {
+      parsed = JSON.parse(text) as Record<string, FieldMapping[]>;
+    } catch (err) {
+      return { ok: false as const, issues: [`Invalid JSON: ${(err as Error).message}`] };
+    }
+    const issues = Object.entries(parsed).flatMap(([kind, rows]) => {
+      if (kind === "custom" && rows && !Array.isArray(rows)) {
+        return Object.entries(rows as unknown as Record<string, FieldMapping[]>).flatMap(
+          ([base, r]) => validateMapping(r ?? []).map((i) => `custom.${base}.${i.target}: ${i.message}`),
+        );
+      }
+      if (!Array.isArray(rows)) return [`${kind}: expected an array of field mappings`];
+      return validateMapping(rows).map((i) => `${kind}.${i.target || "?"}: ${i.message}`);
+    });
+    return { ok: issues.length === 0, issues };
+  }, [settings.mapping]);
+
+  async function discoverFields() {
+    setDiscovering(true);
+    try {
+      const [wp, target] = await Promise.all([
+        api<{ fields: SourceField[] }>("/fields/wp?type=posts").catch(() => ({ fields: [] })),
+        api<TargetSchema>(`/fields/strapi?uid=${encodeURIComponent(settings.postUid)}`).catch(() => null),
+      ]);
+      setWpFields(wp.fields);
+      setStrapiFields(target);
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
+  function loadDefaultMapping() {
+    setSettings((s) => ({
+      ...s,
+      mapping: JSON.stringify(
+        { common: [], post: defaultEntryMapping(), page: defaultEntryMapping(), category: defaultTermMapping() },
+        null,
+        2,
+      ),
+    }));
+  }
   // Taxonomies and custom types only run when they are configured in the settings above.
   const [status, setStatus] = useState<"idle" | "running" | "completed" | "failed">("idle");
   const [events, setEvents] = useState<MigratorEvent[]>([]);
@@ -217,7 +278,7 @@ const HomePage = () => {
             variant="default"
             startIcon={<Play />}
             loading={starting}
-            disabled={!settings.wpBaseUrl || only.length === 0 || status === "running"}
+            disabled={!settings.wpBaseUrl || only.length === 0 || status === "running" || !mappingState.ok}
             onClick={start}
           >
             {formatMessage({ id: t("actions.start"), defaultMessage: "Start migration" })}
@@ -407,6 +468,83 @@ const HomePage = () => {
                 </Grid.Item>
               </Grid.Root>
             </Box>
+          </Box>
+
+          <Box background="neutral0" padding={6} hasRadius shadow="tableShadow">
+            <Flex justifyContent="space-between" alignItems="center">
+              <Typography variant="delta" tag="h2">
+                Field mapping
+              </Typography>
+              <Flex gap={2}>
+                <Button size="S" variant="tertiary" loading={discovering} onClick={discoverFields}>
+                  Read available fields
+                </Button>
+                <Button size="S" variant="secondary" onClick={loadDefaultMapping}>
+                  Load the built-in mapping
+                </Button>
+              </Flex>
+            </Flex>
+            <Box paddingTop={2}>
+              <Typography variant="pi" textColor="neutral600">
+                JSON keyed by kind — common, post, page, category, tag, custom. Each row writes one
+                Strapi field from a WordPress path (<code>source</code>) or a constant
+                (<code>value</code>). Leave empty for the built-in mapping. Transforms:{" "}
+                {Object.keys(TRANSFORMS).join(", ")}.
+              </Typography>
+            </Box>
+            <Box paddingTop={3}>
+              <textarea
+                value={settings.mapping}
+                spellCheck={false}
+                rows={12}
+                onChange={(e) => setSettings((s) => ({ ...s, mapping: e.target.value }))}
+                placeholder={'{\n  "common": [{ "target": "locale", "value": "fr" }]\n}'}
+                style={{
+                  width: "100%",
+                  fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  padding: 12,
+                  borderRadius: 4,
+                  border: `1px solid ${mappingState.ok ? "#dcdce4" : "#d02b20"}`,
+                }}
+              />
+            </Box>
+            {!mappingState.ok && (
+              <Box paddingTop={2}>
+                <Alert closeLabel="Close" title="Invalid mapping" variant="danger">
+                  {mappingState.issues.join(" · ")}
+                </Alert>
+              </Box>
+            )}
+            {(wpFields.length > 0 || strapiFields) && (
+              <Box paddingTop={3}>
+                <Typography variant="pi" fontWeight="bold">
+                  WordPress paths ({wpFields.length})
+                </Typography>
+                <Box
+                  padding={2}
+                  background="neutral100"
+                  hasRadius
+                  style={{ maxHeight: 140, overflowY: "auto", fontFamily: "ui-monospace, monospace", fontSize: 11 }}
+                >
+                  {wpFields.map((f) => `${f.path}`).join("  ·  ")}
+                </Box>
+                <Box paddingTop={2}>
+                  <Typography variant="pi" fontWeight="bold">
+                    Strapi fields on {settings.postUid} ({strapiFields?.source ?? "none"})
+                  </Typography>
+                </Box>
+                <Box
+                  padding={2}
+                  background="neutral100"
+                  hasRadius
+                  style={{ maxHeight: 120, overflowY: "auto", fontFamily: "ui-monospace, monospace", fontSize: 11 }}
+                >
+                  {(strapiFields?.fields ?? []).map((f) => `${f.name}: ${f.type ?? "?"}`).join("  ·  ")}
+                </Box>
+              </Box>
+            )}
           </Box>
 
           <Box background="neutral0" padding={6} hasRadius shadow="tableShadow">

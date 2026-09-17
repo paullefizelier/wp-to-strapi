@@ -16,6 +16,18 @@ export {
 export type { ContentFlavour, MediaIndex, MediaTarget } from "./html-transform.js";
 export { extractReadableContent } from "./content-extract.js";
 export type { ExtractedContent } from "./content-extract.js";
+export {
+  applyMapping,
+  defaultEntryMapping,
+  defaultTermMapping,
+  mergeMappings,
+  readPath,
+  validateMapping,
+  TRANSFORMS,
+} from "./mapping.js";
+export type { FieldMapping, MappingSet, MappingContext, MappingIssue } from "./mapping.js";
+export { flattenEntity, VIRTUAL_SOURCES } from "./introspect.js";
+export type { SourceField, TargetField, TargetSchema } from "./introspect.js";
 export { StateStore } from "./state.js";
 export type { MediaFormat, MigrationState } from "./state.js";
 export type { WpMedia, WpPage, WpPost, WpTerm, StrapiEntry, StrapiUploadFile } from "./types.js";

@@ -1,4 +1,5 @@
 import { request } from "undici";
+import { flattenEntity, VIRTUAL_SOURCES, type SourceField } from "./introspect.js";
 import type { WpMedia, WpPage, WpPost, WpTerm } from "./types.js";
 
 export interface WordPressClientOptions {
@@ -112,6 +113,28 @@ export class WordPressClient {
 
   media(): AsyncGenerator<WpMedia> {
     return this.paginate<WpMedia>("/media", { status: "inherit" });
+  }
+
+  /**
+   * List the fields available on a WP content type, from a real entry. Uses the `edit` context
+   * when credentials are set, which is what exposes `meta` — plugins like ACF surface their
+   * fields here too.
+   */
+  async describeSource(restBase = "posts"): Promise<SourceField[]> {
+    const path = `/${restBase.replace(/^\/+/, "")}`;
+    const query: Record<string, string | number> = { per_page: 1 };
+    if (this.authHeader) query.context = "edit";
+    let body: unknown[];
+    try {
+      ({ body } = await this.get<unknown[]>(path, query));
+    } catch (err) {
+      // `context=edit` is refused when the account lacks the capability — retry as a reader.
+      if (!this.authHeader) throw err;
+      ({ body } = await this.get<unknown[]>(path, { per_page: 1 }));
+    }
+    const sample = body[0];
+    if (!sample) return [...VIRTUAL_SOURCES];
+    return [...flattenEntity(sample), ...VIRTUAL_SOURCES];
   }
 
   /** True when the client can authenticate — non-public statuses require it. */

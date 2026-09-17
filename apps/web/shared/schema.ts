@@ -1,5 +1,25 @@
 import { z } from "zod";
 
+const FieldMappingSchema = z.object({
+  target: z.string().min(1),
+  source: z.string().optional(),
+  value: z.unknown().optional(),
+  transforms: z.array(z.string()).optional(),
+  omitEmpty: z.boolean().optional(),
+});
+
+const MappingRows = z.array(FieldMappingSchema);
+
+/** Per-kind field mappings. Omitted kinds fall back to the engine's built-in mapping. */
+export const MappingSetSchema = z.object({
+  common: MappingRows.optional(),
+  post: MappingRows.optional(),
+  page: MappingRows.optional(),
+  category: MappingRows.optional(),
+  tag: MappingRows.optional(),
+  custom: z.record(MappingRows).optional(),
+});
+
 export const MigrationConfigSchema = z.object({
   wp: z.object({
     baseUrl: z.string().url(),
@@ -33,6 +53,7 @@ export const MigrationConfigSchema = z.object({
       }),
     )
     .default([]),
+  mapping: MappingSetSchema.default({}),
   only: z
     .array(z.enum(["media", "categories", "tags", "posts", "pages", "custom"]))
     .default(["media", "posts", "pages"]),

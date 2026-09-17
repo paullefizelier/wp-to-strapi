@@ -16,6 +16,8 @@ export interface StoredSettings {
   /** `restBase:api::uid.uid[|pluralPath]`, one entry per custom post type. */
   customTypes: string[];
   htmlFallback: boolean;
+  /** Field mapping as JSON text, edited in the admin panel. Empty means the built-in mapping. */
+  mapping: string;
 }
 
 const DEFAULTS: StoredSettings = {
@@ -31,6 +33,7 @@ const DEFAULTS: StoredSettings = {
   statuses: ["publish"],
   customTypes: [],
   htmlFallback: true,
+  mapping: "",
 };
 
 /**

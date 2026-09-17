@@ -3,11 +3,6 @@ export default defineNuxtConfig({
   compatibilityDate: "2025-01-01",
   devtools: { enabled: true },
   modules: ["@nuxt/ui"],
-  ui: {
-    // Force a single primary/gray so the UI renders consistently out of the box.
-    primary: "indigo",
-    gray: "slate",
-  },
   runtimeConfig: {
     // Server-only secrets (not exposed to the client). Overridable via env vars NUXT_*.
     // The UI can still send these explicitly if you prefer not to persist them server-side.

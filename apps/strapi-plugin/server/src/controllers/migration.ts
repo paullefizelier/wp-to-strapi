@@ -7,6 +7,8 @@ export default ({ strapi }: { strapi: Core.Strapi }) => {
     strapi.plugin("wp-import").service("migration") as {
       testWordPress: () => Promise<unknown>;
       start: (only?: Kind[]) => Promise<Run>;
+      wpFields: (restBase: string) => Promise<unknown>;
+      strapiFields: (uid: string) => Promise<unknown>;
     };
 
   const runStoreSvc = () =>
@@ -17,6 +19,16 @@ export default ({ strapi }: { strapi: Core.Strapi }) => {
   return {
     async testWp() {
       return migrationSvc().testWordPress();
+    },
+
+    async wpFields(ctx: { query?: { type?: string } }) {
+      return migrationSvc().wpFields(ctx.query?.type || "posts");
+    },
+
+    async strapiFields(ctx: { query?: { uid?: string }; badRequest: (msg: string) => never }) {
+      const uid = ctx.query?.uid;
+      if (!uid) ctx.badRequest("uid is required");
+      return migrationSvc().strapiFields(uid as string);
     },
 
     async start(ctx: { request: { body?: { only?: string[] } }; badRequest: (msg: string) => never; conflict?: (msg: string) => never }) {

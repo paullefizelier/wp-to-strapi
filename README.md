@@ -29,6 +29,8 @@ All three consume the same core engine, emit the same typed `MigratorEvent`s, an
 - **Idempotent** — writes a `wpId` on each entry so re-runs update instead of duplicating.
 - **Resumable** — persisted state file survives crashes.
 - Typed event bus (`MigratorEvent`) — every front-end subscribes to the same stream.
+- **Fully configurable field mapping** — any WordPress path onto any Strapi field, with
+  transforms, plus constants applied to every import.
 
 ## Project layout
 
@@ -104,6 +106,66 @@ CLI and Nuxt UI need a **Full-access API token** in Strapi. The plugin doesn't �
    - A lookup on `wpId` decides between `create` and `update` (upsert).
 3. **Events.** Every step emits a typed `MigratorEvent`. The CLI prints them; both the Nuxt UI and the Strapi plugin stream them as Server-Sent Events for live progress.
 
+## Field mapping
+
+Every field written to Strapi is configuration, not code. A mapping is a list of rows; each
+row names a Strapi field and where its value comes from — a path into the WordPress entity, or
+a constant applied to every entry.
+
+```jsonc
+{
+  // Applied to every kind. Rows in a kind below override these.
+  "common": [
+    { "target": "locale", "value": "fr" },
+    { "target": "importSource", "value": "wordpress" }
+  ],
+  "post": [
+    { "target": "titre", "source": "title.rendered", "transforms": ["decodeEntities", "trim"] },
+    { "target": "corps", "source": "$content", "transforms": ["rewriteMedia"] },
+    { "target": "resume", "source": "content.rendered", "transforms": ["stripHtml", "truncate:280"] },
+    { "target": "seoTitle", "source": "meta._yoast_wpseo_title" },
+    { "target": "sousTitre", "source": "acf.subtitle" },
+    { "target": "couverture", "source": "featured_media", "transforms": ["mediaId"], "omitEmpty": true },
+    { "target": "rubriques", "source": "categories", "transforms": ["terms:categories"] },
+    { "target": "wpId", "source": "id" }
+  ]
+}
+```
+
+Kinds: `common`, `post`, `page`, `category`, `tag`, and `custom` keyed by REST base. **A kind you
+configure replaces the built-in mapping entirely** — what you see is what gets written. Kinds
+you leave out keep the built-in behaviour, so an empty mapping changes nothing.
+
+**Sources** are dot paths into the REST payload (`title.rendered`, `acf.subtitle`,
+`meta._yoast_wpseo_title`, `categories.0`), plus four the engine computes:
+
+| Virtual source | Value |
+|----------------|-------|
+| `$content` | the rendered body, after the page-builder fallback |
+| `$publishedAt` | the GMT publish date, or `null` for anything not published |
+| `$link` | the entry's public WordPress URL |
+| `$status` | `publish`, `draft`, `future`… |
+
+**Transforms** run left to right, and take an argument after a colon:
+
+| | |
+|---|---|
+| Text | `decodeEntities` `stripHtml` `trim` `lower` `upper` `slugify` `truncate:280` `join:, ` |
+| References | `rewriteMedia` `mediaId` `mediaUrl` `terms:categories` `terms:tags` |
+| Values | `date` `number` `boolean` `string` `first` `default:fallback` |
+
+`omitEmpty: true` drops the field instead of writing an empty value. A mapping is validated
+before the run starts: an unknown transform or a row with neither a source nor a value aborts
+it rather than importing something wrong.
+
+### Picking fields from both sides
+
+Once the WordPress and Strapi connections are set, both UIs read the real field lists: the WP
+side by sampling an entry (with `context=edit` when credentials are set, which is what exposes
+`meta` and ACF), the Strapi side from the content-type schema. The plugin runs in-process and
+always gets the true schema; over HTTP, Strapi v5 only exposes schemas to the admin API, so the
+CLI/Nuxt path falls back to inferring the shape from an existing entry and says so.
+
 ## What actually comes across
 
 The engine reads `content.rendered` from `/wp-json/wp/v2/`. That single fact decides most of
@@ -153,7 +215,7 @@ Want to target a different destination (Payload, Sanity, Ghost…)? Implement `S
 
 ## Extending
 
-- **ACF fields.** Enable the *ACF to REST API* plugin and read `p.acf` inside `buildEntryData`.
+- **ACF fields.** Enable the *ACF to REST API* plugin, then map `acf.<field>` onto a Strapi field — no code needed.
 - **External media providers.** Strapi v5 handles this natively — configure the provider in your Strapi app; the plugin and CLI/UI flows both route uploads through it.
 
 ## First-time setup

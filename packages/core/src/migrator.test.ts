@@ -244,6 +244,56 @@ describe("Migrator", () => {
     });
   });
 
+  it("writes a custom mapping instead of the built-in one", async () => {
+    const { created } = await run({
+      mapping: {
+        post: [
+          { target: "titre", source: "title.rendered", transforms: ["decodeEntities"] },
+          { target: "corps", source: "$content", transforms: ["rewriteMedia"] },
+          { target: "resume", source: "content.rendered", transforms: ["stripHtml", "truncate:10"] },
+          { target: "wpId", source: "id" },
+        ],
+      },
+    });
+    const post = created.find((c) => c.uid === "api::post.post" && c.data.wpId === 1);
+    expect(Object.keys(post?.data ?? {}).sort()).toEqual(["corps", "resume", "titre", "wpId"]);
+    expect(post?.data.titre).toBe("Cafés & co");
+    expect(post?.data.corps).toContain("https://cms.example.com/uploads/photo_hash.jpg");
+  });
+
+  it("applies common fields to every kind, letting kind rows win", async () => {
+    const { created } = await run({
+      mapping: {
+        common: [
+          { target: "locale", value: "fr" },
+          { target: "source", value: "wordpress" },
+        ],
+        post: [
+          { target: "wpId", source: "id" },
+          { target: "source", value: "blog-legacy" },
+        ],
+      },
+    });
+    const post = created.find((c) => c.uid === "api::post.post");
+    const category = created.find((c) => c.uid === "api::category.category");
+    const project = created.find((c) => c.uid === "api::project.project");
+    expect(post?.data).toMatchObject({ locale: "fr", source: "blog-legacy" });
+    // The common rows reach the taxonomy and custom-type payloads too.
+    expect(category?.data).toMatchObject({ locale: "fr", source: "wordpress", name: "News" });
+    expect(project?.data).toMatchObject({ locale: "fr", source: "blog-legacy" });
+  });
+
+  it("refuses to run on an invalid mapping instead of importing rubbish", async () => {
+    const strapi = fakeStrapi();
+    const wp = fakeWp();
+    const migrator = new Migrator(
+      config({ mapping: { post: [{ target: "x", source: "a", transforms: ["nope"] }] } }),
+      { strapi: strapi.adapter, wp: wp.wp },
+    );
+    await expect(migrator.run()).rejects.toThrow(/unknown transform "nope"/);
+    expect(strapi.created).toEqual([]);
+  });
+
   it("only runs the kinds asked for", async () => {
     const strapi = fakeStrapi();
     const wp = fakeWp();
