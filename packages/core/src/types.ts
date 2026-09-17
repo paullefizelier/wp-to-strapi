@@ -31,6 +31,17 @@ export interface WpPage extends WpPost {
   menu_order: number;
 }
 
+/** A term from a WP taxonomy endpoint (/categories, /tags, or a custom taxonomy). */
+export interface WpTerm {
+  id: number;
+  name: string;
+  slug: string;
+  description?: string;
+  count?: number;
+  parent?: number;
+  taxonomy?: string;
+}
+
 export interface WpMedia {
   id: number;
   date: string;

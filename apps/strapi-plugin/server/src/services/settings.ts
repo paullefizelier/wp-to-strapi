@@ -6,8 +6,16 @@ export interface StoredSettings {
   wpAppPassword: string;
   postUid: string;
   pageUid: string;
+  /** Empty means the taxonomy is not migrated. */
+  categoryUid: string;
+  tagUid: string;
   concurrency: number;
   pageSize: number;
+  /** WP statuses to fetch. Anything beyond `publish` needs WP credentials. */
+  statuses: string[];
+  /** `restBase:api::uid.uid[|pluralPath]`, one entry per custom post type. */
+  customTypes: string[];
+  htmlFallback: boolean;
 }
 
 const DEFAULTS: StoredSettings = {
@@ -16,8 +24,13 @@ const DEFAULTS: StoredSettings = {
   wpAppPassword: "",
   postUid: "api::post.post",
   pageUid: "api::page.page",
+  categoryUid: "",
+  tagUid: "",
   concurrency: 4,
   pageSize: 100,
+  statuses: ["publish"],
+  customTypes: [],
+  htmlFallback: true,
 };
 
 /**

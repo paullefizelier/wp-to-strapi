@@ -1,3 +1,5 @@
+import { decode } from "he";
+
 import type { MigrationState } from "./state.js";
 
 /** A migrated file as it should appear in the rewritten HTML. */
@@ -216,14 +218,18 @@ export type ContentFlavour =
  * report it instead of silently importing a blank page.
  */
 export function detectFlavour(html: string): ContentFlavour {
-  const text = (html ?? "").replace(/<[^>]*>/g, "").replace(/&nbsp;/gi, " ").trim();
-  const hasMedia = /<(img|video|audio|iframe|figure)\b/i.test(html ?? "");
-  if (text === "" && !hasMedia) return "empty";
+  // Builder markers come first: a builder page whose body renders blank is still a builder
+  // page, and naming it is what tells you the layout lives somewhere the REST API cannot see.
   if (/\belementor-(element|widget|section|column|container)\b|data-elementor-type/i.test(html)) {
     return "elementor";
   }
   if (/\bet_pb_(section|row|column|module)\b|\[et_pb_/i.test(html)) return "divi";
   if (/\bvc_(row|column|section)\b|\[vc_/i.test(html)) return "wpbakery";
+
+  const text = (html ?? "").replace(/<[^>]*>/g, "").replace(/&nbsp;/gi, " ").trim();
+  const hasMedia = /<(img|video|audio|iframe|figure)\b/i.test(html ?? "");
+  if (text === "" && !hasMedia) return "empty";
+
   if (/\bwp-block-[a-z]/i.test(html) || html.includes("<!-- wp:")) return "gutenberg";
   return "classic";
 }
@@ -238,20 +244,12 @@ export function findShortcodes(html: string): string[] {
   return [...tags];
 }
 
-/** Decode common HTML entities from WP's rendered titles. */
+/**
+ * Decode HTML entities from WP's rendered titles and captions.
+ *
+ * WP hands back `Caf&#233;s &amp; co`; Strapi wants `Cafés & co`. The full entity table
+ * matters here — accented content is exactly what a hand-picked list of smart quotes misses.
+ */
 export function decodeEntities(s: string): string {
-  return s
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#8217;/g, "’")
-    .replace(/&#8216;/g, "‘")
-    .replace(/&#8220;/g, "“")
-    .replace(/&#8221;/g, "”")
-    .replace(/&#8211;/g, "–")
-    .replace(/&#8212;/g, "—")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&#0*39;/g, "'")
-    .replace(/&#0*38;/g, "&")
-    .replace(/&amp;/g, "&");
+  return decode(s ?? "");
 }

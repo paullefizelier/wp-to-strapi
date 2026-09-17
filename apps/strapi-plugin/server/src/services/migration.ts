@@ -1,7 +1,7 @@
 import type { Core } from "@strapi/strapi";
 import { buildConfig, Migrator, WordPressClient } from "@paullefizelier/wp-to-strapi-core";
 import { NativeStrapiAdapter } from "@paullefizelier/wp-to-strapi-adapter";
-import type { Kind } from "@paullefizelier/wp-to-strapi-core";
+import type { CustomTypeConfig, Kind } from "@paullefizelier/wp-to-strapi-core";
 import type { Run } from "./run-store";
 
 interface Settings {
@@ -10,8 +10,25 @@ interface Settings {
   wpAppPassword: string;
   postUid: string;
   pageUid: string;
+  categoryUid: string;
+  tagUid: string;
   concurrency: number;
   pageSize: number;
+  statuses: string[];
+  customTypes: string[];
+  htmlFallback: boolean;
+}
+
+/** `restBase:api::uid.uid[|pluralPath]` — split on the first colon, UIDs contain `::`. */
+function parseCustomTypes(entries: string[] | undefined): CustomTypeConfig[] {
+  return (entries ?? []).flatMap((entry) => {
+    const colon = entry.indexOf(":");
+    if (colon <= 0) return [];
+    const restBase = entry.slice(0, colon).trim();
+    const [uid, pluralPath] = entry.slice(colon + 1).split("|").map((part) => part.trim());
+    if (!restBase || !uid) return [];
+    return [pluralPath ? { restBase, uid, pluralPath } : { restBase, uid }];
+  });
 }
 
 const service = ({ strapi }: { strapi: Core.Strapi }) => {
@@ -45,7 +62,7 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => {
       }
     },
 
-    async start(only: Kind[] = ["media", "posts", "pages"]): Promise<Run> {
+    async start(only?: Kind[]): Promise<Run> {
       const s = await settingsSvc().get();
       if (!s.wpBaseUrl) throw new Error("WP base URL not configured");
 
@@ -61,9 +78,14 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => {
           token: "internal",
           postUid: s.postUid,
           pageUid: s.pageUid,
+          categoryUid: s.categoryUid || undefined,
+          tagUid: s.tagUid || undefined,
         },
         concurrency: s.concurrency,
         pageSize: s.pageSize,
+        statuses: s.statuses,
+        customTypes: parseCustomTypes(s.customTypes),
+        htmlFallback: s.htmlFallback,
         stateFile: (strapi.config.get("plugin::wp-import.stateFile") as string | undefined) ?? "./.wp-import-state.json",
       });
 
@@ -77,7 +99,7 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => {
       // Fire-and-forget: the controller returns the run id immediately so the UI can subscribe.
       (async () => {
         try {
-          await migrator.run({ only });
+          await migrator.run(only ? { only } : {});
           runStoreSvc().complete(run);
         } catch (err) {
           runStoreSvc().complete(run, err as Error);

@@ -8,10 +8,14 @@ type Counters = Record<Kind, { ok: number; skipped: number; errors: number; tota
 const events = ref<MigratorEvent[]>([]);
 const status = ref<"idle" | "running" | "completed" | "failed">("idle");
 const error = ref<string | null>(null);
+const emptyCounter = () => ({ ok: 0, skipped: 0, errors: 0, total: 0 });
 const counters = ref<Counters>({
-  media: { ok: 0, skipped: 0, errors: 0, total: 0 },
-  posts: { ok: 0, skipped: 0, errors: 0, total: 0 },
-  pages: { ok: 0, skipped: 0, errors: 0, total: 0 },
+  media: emptyCounter(),
+  categories: emptyCounter(),
+  tags: emptyCounter(),
+  posts: emptyCounter(),
+  pages: emptyCounter(),
+  custom: emptyCounter(),
 });
 
 const logEnd = ref<HTMLDivElement | null>(null);
@@ -19,6 +23,8 @@ const logEnd = ref<HTMLDivElement | null>(null);
 function apply(e: MigratorEvent) {
   events.value.push(e);
   if (events.value.length > 2000) events.value.splice(0, events.value.length - 2000);
+  // A state file written by an older version can carry kinds this build does not know.
+  if ("kind" in e && !counters.value[e.kind]) counters.value[e.kind] = emptyCounter();
   if (e.type === "item-ok") counters.value[e.kind].ok += 1;
   else if (e.type === "item-skip") counters.value[e.kind].skipped += 1;
   else if (e.type === "item-error") counters.value[e.kind].errors += 1;
@@ -76,8 +82,17 @@ onUnmounted(() => {
   es?.close();
 });
 
+const KIND_LABELS: Record<Kind, string> = {
+  media: "Médias",
+  categories: "Catégories",
+  tags: "Étiquettes",
+  posts: "Articles",
+  pages: "Pages",
+  custom: "Types personnalisés",
+};
+
 function kindLabel(k: Kind) {
-  return k === "media" ? "Médias" : k === "posts" ? "Articles" : "Pages";
+  return KIND_LABELS[k] ?? k;
 }
 
 const statusColor = computed<"gray" | "blue" | "green" | "red">(() =>

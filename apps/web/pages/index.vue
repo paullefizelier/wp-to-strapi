@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { Kind } from "@paullefizelier/wp-to-strapi-core";
 import { useMigrationConfig } from "~/composables/useMigrationConfig";
 
 definePageMeta({ title: "Configuration" });
@@ -14,9 +15,34 @@ const starting = ref(false);
 
 const kindOptions = [
   { value: "media", label: "Médias" },
+  { value: "categories", label: "Catégories" },
+  { value: "tags", label: "Étiquettes" },
   { value: "posts", label: "Articles" },
   { value: "pages", label: "Pages" },
+  { value: "custom", label: "Types personnalisés" },
 ];
+
+/** CPTs are edited as `restBase:api::uid.uid[|pluralPath]`, one per line. */
+const customTypesText = computed(() =>
+  config.value.customTypes
+    .map((t) => `${t.restBase}:${t.uid}${t.pluralPath ? `|${t.pluralPath}` : ""}`)
+    .join("\n"),
+);
+
+function setCustomTypes(text: string) {
+  config.value.customTypes = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const colon = line.indexOf(":");
+      if (colon <= 0) return [];
+      const [uid, pluralPath] = line.slice(colon + 1).split("|").map((part) => part.trim());
+      if (!uid) return [];
+      const restBase = line.slice(0, colon).trim();
+      return [pluralPath ? { restBase, uid, pluralPath } : { restBase, uid }];
+    });
+}
 
 async function testWordPress() {
   testingWp.value = true;
@@ -179,6 +205,12 @@ const canStart = computed(() => {
           <UFormGroup label="UID des pages">
             <UInput v-model="config.strapi.pageUid" placeholder="api::page.page" />
           </UFormGroup>
+          <UFormGroup label="UID des catégories" help="Vide = catégories non migrées">
+            <UInput v-model="config.strapi.categoryUid" placeholder="api::category.category" />
+          </UFormGroup>
+          <UFormGroup label="UID des étiquettes" help="Vide = étiquettes non migrées">
+            <UInput v-model="config.strapi.tagUid" placeholder="api::tag.tag" />
+          </UFormGroup>
         </div>
         <UAlert
           v-if="strapiResult"
@@ -202,11 +234,11 @@ const canStart = computed(() => {
               v-for="opt in kindOptions"
               :key="opt.value"
               :label="opt.label"
-              :model-value="config.only.includes(opt.value as 'media' | 'posts' | 'pages')"
+              :model-value="config.only.includes(opt.value as Kind)"
               @update:model-value="(v: boolean) => {
                 const set = new Set(config.only);
-                if (v) set.add(opt.value as 'media' | 'posts' | 'pages');
-                else set.delete(opt.value as 'media' | 'posts' | 'pages');
+                if (v) set.add(opt.value as Kind);
+                else set.delete(opt.value as Kind);
                 config.only = [...set];
               }"
             />
@@ -223,6 +255,36 @@ const canStart = computed(() => {
             <UToggle v-model="config.dryRun" />
           </UFormGroup>
         </div>
+        <div class="grid grid-cols-2 gap-4">
+          <UFormGroup
+            label="Inclure brouillons et programmés"
+            help="Importés en brouillon Strapi. Nécessite les identifiants WordPress."
+          >
+            <UToggle
+              :model-value="config.statuses.length > 1"
+              @update:model-value="(v: boolean) => {
+                config.statuses = v ? ['publish', 'draft', 'pending', 'future', 'private'] : ['publish'];
+              }"
+            />
+          </UFormGroup>
+          <UFormGroup
+            label="Récupérer le contenu des page builders"
+            help="Lit la page publique quand le REST ne renvoie rien (Elementor, Divi, FSE)."
+          >
+            <UToggle v-model="config.htmlFallback" />
+          </UFormGroup>
+        </div>
+        <UFormGroup
+          label="Types personnalisés (CPT)"
+          help="Un par ligne : restBase:api::uid.uid — ex. portfolio:api::project.project"
+        >
+          <UTextarea
+            :model-value="customTypesText"
+            :rows="2"
+            placeholder="portfolio:api::project.project"
+            @update:model-value="setCustomTypes"
+          />
+        </UFormGroup>
       </div>
     </UCard>
 

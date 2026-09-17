@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMediaIndex,
+  decodeEntities,
   detectFlavour,
   findShortcodes,
   findUnresolvedMediaUrls,
@@ -165,6 +166,10 @@ describe("detectFlavour", () => {
     expect(detectFlavour(html)).toBe(expected);
   });
 
+  it("names the builder even when the body renders blank", () => {
+    expect(detectFlavour(`<div class="elementor-element elementor-widget"></div>`)).toBe("elementor");
+  });
+
   it("does not call an image-only page empty", () => {
     expect(detectFlavour(`<figure><img src="/a.jpg"></figure>`)).not.toBe("empty");
   });
@@ -180,5 +185,17 @@ describe("findShortcodes", () => {
 
   it("ignores plain bracketed text", () => {
     expect(findShortcodes("<p>see [1] and [ok]</p>")).toEqual([]);
+  });
+});
+
+describe("decodeEntities", () => {
+  it("decodes numeric, hex and named entities, accents included", () => {
+    expect(decodeEntities("Caf&#233;s &amp; cr&egrave;me")).toBe("Cafés & crème");
+    expect(decodeEntities("&#x153;uvre &#8217;24")).toBe("œuvre ’24");
+    expect(decodeEntities("&lt;script&gt;")).toBe("<script>");
+  });
+
+  it("leaves plain text untouched", () => {
+    expect(decodeEntities("déjà vu — 100% ok")).toBe("déjà vu — 100% ok");
   });
 });

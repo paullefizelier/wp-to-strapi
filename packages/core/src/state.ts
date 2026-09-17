@@ -17,9 +17,20 @@ export interface MigrationState {
   >;
   posts: Record<number, { documentId: string }>;
   pages: Record<number, { documentId: string }>;
+  categories: Record<number, { documentId: string }>;
+  tags: Record<number, { documentId: string }>;
+  /** Custom post types, keyed by their REST base. */
+  custom: Record<string, Record<number, { documentId: string }>>;
 }
 
-const EMPTY: MigrationState = { media: {}, posts: {}, pages: {} };
+const EMPTY: MigrationState = {
+  media: {},
+  posts: {},
+  pages: {},
+  categories: {},
+  tags: {},
+  custom: {},
+};
 
 export class StateStore {
   private state: MigrationState = structuredClone(EMPTY);
@@ -62,6 +73,17 @@ export class StateStore {
 
   setPage(wpId: number, documentId: string): void {
     this.state.pages[wpId] = { documentId };
+    this.dirty = true;
+  }
+
+  setTerm(taxonomy: "categories" | "tags", wpId: number, documentId: string): void {
+    this.state[taxonomy][wpId] = { documentId };
+    this.dirty = true;
+  }
+
+  setCustom(restBase: string, wpId: number, documentId: string): void {
+    const bucket = (this.state.custom[restBase] ??= {});
+    bucket[wpId] = { documentId };
     this.dirty = true;
   }
 

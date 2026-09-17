@@ -1,5 +1,5 @@
 import { request } from "undici";
-import type { WpMedia, WpPage, WpPost } from "./types.js";
+import type { WpMedia, WpPage, WpPost, WpTerm } from "./types.js";
 
 export interface WordPressClientOptions {
   baseUrl: string;
@@ -87,16 +87,36 @@ export class WordPressClient {
     return { posts: posts.total, pages: pages.total, media: media.total };
   }
 
-  posts(): AsyncGenerator<WpPost> {
-    return this.paginate<WpPost>("/posts", { status: "publish" });
+  posts(statuses: ReadonlyArray<string> = ["publish"]): AsyncGenerator<WpPost> {
+    return this.paginate<WpPost>("/posts", { status: statuses.join(",") });
   }
 
-  pages(): AsyncGenerator<WpPage> {
-    return this.paginate<WpPage>("/pages", { status: "publish" });
+  pages(statuses: ReadonlyArray<string> = ["publish"]): AsyncGenerator<WpPage> {
+    return this.paginate<WpPage>("/pages", { status: statuses.join(",") });
+  }
+
+  /** Any custom post type exposed under its REST base, e.g. `portfolio`. */
+  customType(
+    restBase: string,
+    statuses: ReadonlyArray<string> = ["publish"],
+  ): AsyncGenerator<WpPost> {
+    return this.paginate<WpPost>(`/${restBase.replace(/^\/+/, "")}`, {
+      status: statuses.join(","),
+    });
+  }
+
+  /** Terms of a taxonomy (`categories`, `tags`, or a custom taxonomy's REST base). */
+  terms(restBase: string): AsyncGenerator<WpTerm> {
+    return this.paginate<WpTerm>(`/${restBase.replace(/^\/+/, "")}`);
   }
 
   media(): AsyncGenerator<WpMedia> {
     return this.paginate<WpMedia>("/media", { status: "inherit" });
+  }
+
+  /** True when the client can authenticate — non-public statuses require it. */
+  get authenticated(): boolean {
+    return this.authHeader !== undefined;
   }
 
   /**

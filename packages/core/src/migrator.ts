@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { basename } from "node:path";
 import pLimit from "p-limit";
-import type { AppConfig } from "./config.js";
+import type { AppConfig, CustomTypeConfig } from "./config.js";
 import { extractReadableContent } from "./content-extract.js";
 import {
   decodeEntities,
@@ -13,7 +13,7 @@ import {
 import { StateStore, type MediaFormat } from "./state.js";
 import type { StrapiAdapter } from "./strapi-adapter.js";
 import { StrapiClient } from "./strapi-client.js";
-import type { StrapiUploadFile, WpMedia, WpPage, WpPost } from "./types.js";
+import type { StrapiUploadFile, WpMedia, WpPage, WpPost, WpTerm } from "./types.js";
 import { WordPressClient } from "./wordpress-client.js";
 
 /** Keep the responsive variants Strapi generated so `srcset` can be rebuilt on the way out. */
@@ -23,7 +23,7 @@ function toMediaFormats(file: StrapiUploadFile): MediaFormat[] {
     .sort((a, b) => a.width - b.width);
 }
 
-export type Kind = "media" | "posts" | "pages";
+export type Kind = "media" | "categories" | "tags" | "posts" | "pages" | "custom";
 
 export interface MigrateOptions {
   only?: ReadonlyArray<Kind>;
@@ -37,7 +37,18 @@ export type MigratorEvent =
   | { type: "item-ok"; kind: Kind; wpId: number; detail: string }
   | { type: "item-error"; kind: Kind; wpId: number; message: string }
   | { type: "log"; level: "info" | "warn" | "error"; message: string }
-  | { type: "run-end"; at: string; summary: { media: number; posts: number; pages: number } };
+  | {
+      type: "run-end";
+      at: string;
+      summary: {
+        media: number;
+        posts: number;
+        pages: number;
+        categories: number;
+        tags: number;
+        custom: number;
+      };
+    };
 
 export declare interface Migrator {
   on(event: "event", listener: (e: MigratorEvent) => void): this;
@@ -85,14 +96,44 @@ export class Migrator extends EventEmitter {
     this.emit("event", e);
   }
 
+  /** Everything this configuration can migrate, in dependency order. */
+  private configuredKinds(): Kind[] {
+    const kinds: Kind[] = ["media"];
+    if (this.cfg.strapi.categoryUid) kinds.push("categories");
+    if (this.cfg.strapi.tagUid) kinds.push("tags");
+    kinds.push("posts", "pages");
+    if (this.cfg.customTypes.length > 0) kinds.push("custom");
+    return kinds;
+  }
+
   async run(opts: MigrateOptions = {}): Promise<void> {
     await this.state.load();
-    const kinds = (opts.only ?? ["media", "posts", "pages"]) as Kind[];
+    const configured = this.configuredKinds();
+    const kinds = opts.only ? configured.filter((k) => opts.only?.includes(k)) : configured;
     this.fire({ type: "run-start", at: new Date().toISOString(), kinds });
 
+    const extraStatuses = this.cfg.statuses.filter((st) => st !== "publish");
+    if (extraStatuses.length > 0 && !this.wp.authenticated) {
+      this.fire({
+        type: "log",
+        level: "warn",
+        message:
+          `Statuses ${extraStatuses.join(", ")} need WordPress credentials — ` +
+          `without them the REST API only returns published content.`,
+      });
+    }
+
+    // Media and taxonomies first: posts reference both.
     if (kinds.includes("media")) await this.migrateMedia();
+    if (kinds.includes("categories")) {
+      await this.migrateTerms("categories", this.cfg.strapi.categoryUid, this.cfg.strapi.categoryPluralPath);
+    }
+    if (kinds.includes("tags")) {
+      await this.migrateTerms("tags", this.cfg.strapi.tagUid, this.cfg.strapi.tagPluralPath);
+    }
     if (kinds.includes("posts")) await this.migratePosts();
     if (kinds.includes("pages")) await this.migratePages();
+    if (kinds.includes("custom")) await this.migrateCustomTypes();
 
     await this.state.persist();
     const s = this.state.get();
@@ -103,8 +144,99 @@ export class Migrator extends EventEmitter {
         media: Object.keys(s.media).length,
         posts: Object.keys(s.posts).length,
         pages: Object.keys(s.pages).length,
+        categories: Object.keys(s.categories).length,
+        tags: Object.keys(s.tags).length,
+        custom: Object.values(s.custom).reduce((n, bucket) => n + Object.keys(bucket).length, 0),
       },
     });
+  }
+
+  // ----- Taxonomies -----
+
+  private async migrateTerms(
+    kind: "categories" | "tags",
+    uid: string | undefined,
+    pluralOverride: string | undefined,
+  ): Promise<void> {
+    if (!uid) return;
+    this.fire({ type: "section-start", kind });
+    const tasks: Promise<void>[] = [];
+    let count = 0;
+    for await (const term of this.wp.terms(kind)) {
+      count += 1;
+      tasks.push(this.limit(() => this.migrateOneTerm(kind, term, uid, pluralOverride)));
+    }
+    await Promise.all(tasks);
+    this.fire({ type: "section-end", kind, total: count });
+  }
+
+  private async migrateOneTerm(
+    kind: "categories" | "tags",
+    term: WpTerm,
+    uid: string,
+    pluralOverride?: string,
+  ): Promise<void> {
+    try {
+      const data: Record<string, unknown> = {
+        name: decodeEntities(term.name ?? "").trim(),
+        slug: term.slug,
+        description: decodeEntities(term.description ?? ""),
+        wpId: term.id,
+      };
+      if (this.cfg.dryRun) {
+        this.fire({ type: "item-ok", kind, wpId: term.id, detail: `[dry-run] ${term.slug}` });
+        return;
+      }
+      const existing = await this.strapi.findOneBy(uid, "wpId", term.id, pluralOverride);
+      const saved = existing
+        ? await this.strapi.update(uid, existing.documentId, data, pluralOverride)
+        : await this.strapi.create(uid, data, pluralOverride);
+      this.state.setTerm(kind, term.id, saved.documentId);
+      await this.state.persist();
+      this.fire({ type: "item-ok", kind, wpId: term.id, detail: `${term.slug} → ${saved.documentId}` });
+    } catch (err) {
+      this.fire({ type: "item-error", kind, wpId: term.id, message: (err as Error).message });
+    }
+  }
+
+  // ----- Custom post types -----
+
+  private async migrateCustomTypes(): Promise<void> {
+    this.fire({ type: "section-start", kind: "custom" });
+    let count = 0;
+    for (const type of this.cfg.customTypes) {
+      const tasks: Promise<void>[] = [];
+      try {
+        for await (const entry of this.wp.customType(type.restBase, this.cfg.statuses)) {
+          count += 1;
+          tasks.push(this.limit(() => this.migrateOneCustom(entry, type)));
+        }
+      } catch (err) {
+        this.fire({
+          type: "log",
+          level: "error",
+          message: `custom type "${type.restBase}": ${(err as Error).message}`,
+        });
+      }
+      await Promise.all(tasks);
+    }
+    this.fire({ type: "section-end", kind: "custom", total: count });
+  }
+
+  private async migrateOneCustom(p: WpPost, type: CustomTypeConfig): Promise<void> {
+    try {
+      const { documentId } = await this.upsertEntry(type.uid, p, type.pluralPath);
+      this.state.setCustom(type.restBase, p.id, documentId);
+      await this.state.persist();
+      this.fire({
+        type: "item-ok",
+        kind: "custom",
+        wpId: p.id,
+        detail: `${type.restBase}/${p.slug} → ${documentId}`,
+      });
+    } catch (err) {
+      this.fire({ type: "item-error", kind: "custom", wpId: p.id, message: (err as Error).message });
+    }
   }
 
   // ----- Media -----
@@ -175,7 +307,7 @@ export class Migrator extends EventEmitter {
     this.fire({ type: "section-start", kind: "posts" });
     const tasks: Promise<void>[] = [];
     let count = 0;
-    for await (const p of this.wp.posts()) {
+    for await (const p of this.wp.posts(this.cfg.statuses)) {
       count += 1;
       tasks.push(this.limit(() => this.migrateOnePost(p)));
     }
@@ -187,7 +319,7 @@ export class Migrator extends EventEmitter {
     this.fire({ type: "section-start", kind: "pages" });
     const tasks: Promise<void>[] = [];
     let count = 0;
-    for await (const p of this.wp.pages()) {
+    for await (const p of this.wp.pages(this.cfg.statuses)) {
       count += 1;
       tasks.push(this.limit(() => this.migrateOnePage(p)));
     }
@@ -260,6 +392,21 @@ export class Migrator extends EventEmitter {
       publishedAt: p.status === "publish" ? p.date_gmt + "Z" : null,
     };
     if (featured) data.cover = featured.strapiId;
+
+    const state = this.state.get();
+    if (this.cfg.strapi.categoryUid) {
+      const ids = (p.categories ?? [])
+        .map((wpId) => state.categories[wpId]?.documentId)
+        .filter((id): id is string => Boolean(id));
+      if (ids.length > 0) data[this.cfg.strapi.categoryField] = ids;
+    }
+    if (this.cfg.strapi.tagUid) {
+      const ids = (p.tags ?? [])
+        .map((wpId) => state.tags[wpId]?.documentId)
+        .filter((id): id is string => Boolean(id));
+      if (ids.length > 0) data[this.cfg.strapi.tagField] = ids;
+    }
+
     return {
       data,
       warnings: [...resolved.warnings, ...this.auditContent(p, rendered, content)],
@@ -294,6 +441,20 @@ export class Migrator extends EventEmitter {
       warnings.push(
         `${label}: ${shortcodes.length} unexpanded shortcode(s) kept as literal text: ` +
           shortcodes.slice(0, 5).map((t) => `[${t}]`).join(" "),
+      );
+    }
+
+    const state = this.state.get();
+    const missingTerms = [
+      ...(this.cfg.strapi.categoryUid
+        ? (p.categories ?? []).filter((id) => !state.categories[id])
+        : []),
+      ...(this.cfg.strapi.tagUid ? (p.tags ?? []).filter((id) => !state.tags[id]) : []),
+    ];
+    if (missingTerms.length > 0) {
+      warnings.push(
+        `${label}: ${missingTerms.length} term(s) not in the state file — run the categories ` +
+          `and tags steps before posts, or the relations stay empty.`,
       );
     }
 

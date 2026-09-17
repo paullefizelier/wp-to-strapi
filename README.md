@@ -91,14 +91,15 @@ CLI and Nuxt UI need a **Full-access API token** in Strapi. The plugin doesn't �
 
 ## How it works
 
-1. **Media first.** The migrator pages through `/wp-json/wp/v2/media` (with WP's internal
+1. **Media and taxonomies first.** The migrator pages through `/wp-json/wp/v2/media` (with WP's internal
    `inherit` status — the media endpoint rejects `publish`), downloads each binary from
    `source_url`, and uploads to Strapi's upload plugin. The `wpMediaId → strapiFileId` mapping
    is persisted, along with the responsive formats Strapi generated.
-2. **Articles & pages.** For each entry:
+2. **Articles, pages & custom types.** For each entry:
    - HTML `content` is scanned and every known WP media URL is rewritten to its new Strapi URL —
      `src`, `href`, `srcset`, CSS `url(...)` and bare occurrences in text.
    - `featured_media` is attached as the `cover` field.
+   - Categories and tags are attached by `documentId` when those steps ran.
    - The content is audited, and anything the REST API could not hand over is reported.
    - A lookup on `wpId` decides between `create` and `update` (upsert).
 3. **Events.** Every step emits a typed `MigratorEvent`. The CLI prints them; both the Nuxt UI and the Strapi plugin stream them as Server-Sent Events for live progress.
@@ -112,11 +113,29 @@ what follows — anything WordPress keeps outside the rendered post content is i
 |-------------|--------|
 | **Classic editor** | Clean migration. |
 | **Gutenberg** | Content migrates well, but the HTML keeps `wp-block-*` classes and relies on WP's block stylesheet and `theme.json` variables. Budget for a stylesheet on the Strapi front-end, or parse the blocks into a dynamic zone. |
-| **FSE (full-site editing)** | Page and post *content* migrates. Templates, template parts, navigation, global styles and patterns (`wp_template`, `wp_template_part`, `wp_navigation`, `wp_global_styles`) do **not** — header, footer and site layout are rebuilt on the front-end side. |
-| **Elementor / Divi / WPBakery** | The layout lives in post meta (`_elementor_data` and friends) and is rendered by the builder's own frontend hooks, so the REST API returns an empty or flattened body. The run warns on each such page; plan on rebuilding them. |
+| **FSE (full-site editing)** | Page and post *content* migrates, through the same public-page fallback when the REST body comes back empty. Templates, template parts, navigation, global styles and patterns (`wp_template`, `wp_template_part`, `wp_navigation`, `wp_global_styles`) do **not** — header, footer and site layout are rebuilt on the front-end side. |
+| **Elementor / Divi / WPBakery** | The layout lives in post meta (`_elementor_data` and friends) and is rendered by the builder's own frontend hooks, so the REST API returns an empty or flattened body. The migrator falls back to the **public page** and keeps its text and images (see below). The layout itself is not migrated. |
 
-Not migrated (by design, for now): categories and tags, authors, menus, custom post types, ACF
-fields, comments, SEO metadata, redirects, and drafts (only `publish` is fetched). See
+### The public-page fallback
+
+When `content.rendered` is empty or carries builder markup, the migrator fetches the page's
+public URL and strips it down to **text and images**: headings, paragraphs, lists, links,
+tables and `<img>`. Builder wrappers, classes, inline styles, scripts, navigation, comments and
+site chrome are all dropped, and URLs are absolutised so the media rewriter can map them onto
+their Strapi uploads. Embeds (iframe, video, audio) are dropped and counted in the run log.
+
+It only replaces the REST body when it recovers *more* text, so Gutenberg and classic content
+are never touched. Turn it off with `HTML_FALLBACK=false` (CLI) or the toggle in the UI.
+
+### Optional content types
+
+| What | How to turn it on |
+|------|-------------------|
+| **Categories / tags** | Set `STRAPI_CATEGORY_UID` / `STRAPI_TAG_UID` (or the UID fields in the UI). Terms migrate before posts and are related by `documentId` on the `categories` / `tags` fields. Left empty, they are skipped entirely. |
+| **Drafts, pending, scheduled, private** | `WP_STATUSES=publish,draft,pending,future,private`. Needs WordPress credentials; non-published entries land as Strapi drafts (`publishedAt: null`). |
+| **Custom post types** | `WP_CUSTOM_TYPES=portfolio:api::project.project,event:api::event.event\|evenements` — `restBase:uid`, with an optional `\|pluralPath`. |
+
+Still not migrated: authors, menus, ACF fields, comments, SEO metadata and redirects. See
 [Extending](#extending) for where to hook each of them in.
 
 Media URLs that survive the rewrite — files hosted on another domain, or attachments missing
@@ -134,8 +153,6 @@ Want to target a different destination (Payload, Sanity, Ghost…)? Implement `S
 
 ## Extending
 
-- **Categories / tags.** Add a `category` content-type, migrate them before posts, keep a `wpCategoryId → strapiDocumentId` map in the state store, then relate posts.
-- **Custom Post Types.** Copy the `migratePosts` path (`/wp-json/wp/v2/{cpt}`) and target the corresponding Strapi UID.
 - **ACF fields.** Enable the *ACF to REST API* plugin and read `p.acf` inside `buildEntryData`.
 - **External media providers.** Strapi v5 handles this natively — configure the provider in your Strapi app; the plugin and CLI/UI flows both route uploads through it.
 

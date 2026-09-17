@@ -16,6 +16,25 @@ export interface StrapiConfig {
   pageUid: string;
   postPluralPath?: string;
   pagePluralPath?: string;
+  /** Set to migrate WP categories and relate them to posts. No default — opt in. */
+  categoryUid?: string;
+  categoryPluralPath?: string;
+  /** Set to migrate WP tags and relate them to posts. No default — opt in. */
+  tagUid?: string;
+  tagPluralPath?: string;
+  /** Relation field names on the post content-type. */
+  categoryField: string;
+  tagField: string;
+}
+
+/** A WordPress custom post type mapped onto a Strapi collection. */
+export interface CustomTypeConfig {
+  /** REST base under /wp/v2 — `portfolio` for /wp-json/wp/v2/portfolio. */
+  restBase: string;
+  /** Target Strapi UID, e.g. `api::project.project`. */
+  uid: string;
+  /** Override when the plural REST path is not the naive pluralisation of the UID. */
+  pluralPath?: string;
 }
 
 export interface AppConfig {
@@ -30,10 +49,22 @@ export interface AppConfig {
    * its text and images. Off means those entries import as WordPress returned them.
    */
   htmlFallback: boolean;
+  /**
+   * WordPress statuses to fetch for posts, pages and custom types. Anything beyond `publish`
+   * needs credentials, and lands in Strapi as a draft (`publishedAt: null`).
+   */
+  statuses: string[];
+  /** Custom post types to migrate alongside posts and pages. */
+  customTypes: CustomTypeConfig[];
 }
+
+export const DRAFT_STATUSES = ["draft", "pending", "future", "private"] as const;
 
 export const defaults = {
   htmlFallback: true,
+  statuses: ["publish"],
+  categoryField: "categories",
+  tagField: "tags",
   concurrency: 4,
   pageSize: 100,
   stateFile: "./.migration-state.json",
@@ -51,6 +82,8 @@ export function buildConfig(input: {
   stateFile?: string;
   dryRun?: boolean;
   htmlFallback?: boolean;
+  statuses?: string[];
+  customTypes?: CustomTypeConfig[];
 }): AppConfig {
   return {
     wp: {
@@ -65,11 +98,20 @@ export function buildConfig(input: {
       pageUid: input.strapi.pageUid ?? defaults.pageUid,
       postPluralPath: input.strapi.postPluralPath,
       pagePluralPath: input.strapi.pagePluralPath,
+      categoryUid: input.strapi.categoryUid,
+      categoryPluralPath: input.strapi.categoryPluralPath,
+      tagUid: input.strapi.tagUid,
+      tagPluralPath: input.strapi.tagPluralPath,
+      categoryField: input.strapi.categoryField ?? defaults.categoryField,
+      tagField: input.strapi.tagField ?? defaults.tagField,
     },
     concurrency: input.concurrency ?? defaults.concurrency,
     pageSize: input.pageSize ?? defaults.pageSize,
     stateFile: input.stateFile ?? defaults.stateFile,
     dryRun: input.dryRun ?? defaults.dryRun,
     htmlFallback: input.htmlFallback ?? defaults.htmlFallback,
+    statuses:
+      input.statuses && input.statuses.length > 0 ? [...input.statuses] : [...defaults.statuses],
+    customTypes: input.customTypes ? [...input.customTypes] : [],
   };
 }

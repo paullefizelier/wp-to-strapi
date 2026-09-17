@@ -14,6 +14,9 @@ const empty = (): MigrationConfigInput => ({
   pageSize: 100,
   stateFile: "./.migration-state.json",
   dryRun: false,
+  htmlFallback: true,
+  statuses: ["publish"],
+  customTypes: [],
   only: ["media", "posts", "pages"],
 });
 

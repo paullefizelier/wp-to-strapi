@@ -17,13 +17,20 @@ import { Play, Check } from "@strapi/icons";
 import { api, eventsUrl } from "../api";
 import pluginId from "../pluginId";
 
-type Kind = "media" | "posts" | "pages";
+type Kind = "media" | "categories" | "tags" | "posts" | "pages" | "custom";
+
+const KINDS: Kind[] = ["media", "categories", "tags", "posts", "pages", "custom"];
 
 interface Settings {
   wpBaseUrl: string;
   wpUsername: string;
   wpAppPassword: string;
   postUid: string;
+  categoryUid: string;
+  tagUid: string;
+  statuses: string[];
+  customTypes: string[];
+  htmlFallback: boolean;
   pageUid: string;
   concurrency: number;
   pageSize: number;
@@ -37,13 +44,18 @@ type MigratorEvent =
   | { type: "item-ok"; kind: Kind; wpId: number; detail: string }
   | { type: "item-error"; kind: Kind; wpId: number; message: string }
   | { type: "log"; level: "info" | "warn" | "error"; message: string }
-  | { type: "run-end"; at: string; summary: { media: number; posts: number; pages: number } };
+  | { type: "run-end"; at: string; summary: Record<string, number> };
 
 const emptySettings: Settings = {
   wpBaseUrl: "",
   wpUsername: "",
   wpAppPassword: "",
   postUid: "api::post.post",
+  categoryUid: "",
+  tagUid: "",
+  statuses: ["publish"],
+  customTypes: [],
+  htmlFallback: true,
   pageUid: "api::page.page",
   concurrency: 4,
   pageSize: 100,
@@ -60,6 +72,7 @@ const HomePage = () => {
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [starting, setStarting] = useState(false);
   const [only, setOnly] = useState<Kind[]>(["media", "posts", "pages"]);
+  // Taxonomies and custom types only run when they are configured in the settings above.
   const [status, setStatus] = useState<"idle" | "running" | "completed" | "failed">("idle");
   const [events, setEvents] = useState<MigratorEvent[]>([]);
   const esRef = useRef<EventSource | null>(null);
@@ -91,11 +104,9 @@ const HomePage = () => {
   }, []);
 
   const counters = useMemo(() => {
-    const c: Record<Kind, { ok: number; skipped: number; errors: number; total: number }> = {
-      media: { ok: 0, skipped: 0, errors: 0, total: 0 },
-      posts: { ok: 0, skipped: 0, errors: 0, total: 0 },
-      pages: { ok: 0, skipped: 0, errors: 0, total: 0 },
-    };
+    const c = Object.fromEntries(
+      KINDS.map((k) => [k, { ok: 0, skipped: 0, errors: 0, total: 0 }]),
+    ) as Record<Kind, { ok: number; skipped: number; errors: number; total: number }>;
     for (const e of events) {
       if (e.type === "item-ok") c[e.kind].ok += 1;
       else if (e.type === "item-skip") c[e.kind].skipped += 1;
@@ -325,6 +336,54 @@ const HomePage = () => {
                   </Field.Root>
                 </Grid.Item>
                 <Grid.Item col={6} s={12}>
+                  <Field.Root name="categoryUid">
+                    <Field.Label>
+                      {formatMessage({ id: t("settings.strapi.categoryUid"), defaultMessage: "Categories UID (empty = skip)" })}
+                    </Field.Label>
+                    <TextInput
+                      placeholder="api::category.category"
+                      value={settings.categoryUid}
+                      onChange={(e: { target: { value: string } }) =>
+                        setSettings((s) => ({ ...s, categoryUid: e.target.value }))
+                      }
+                    />
+                  </Field.Root>
+                </Grid.Item>
+                <Grid.Item col={6} s={12}>
+                  <Field.Root name="tagUid">
+                    <Field.Label>
+                      {formatMessage({ id: t("settings.strapi.tagUid"), defaultMessage: "Tags UID (empty = skip)" })}
+                    </Field.Label>
+                    <TextInput
+                      placeholder="api::tag.tag"
+                      value={settings.tagUid}
+                      onChange={(e: { target: { value: string } }) =>
+                        setSettings((s) => ({ ...s, tagUid: e.target.value }))
+                      }
+                    />
+                  </Field.Root>
+                </Grid.Item>
+                <Grid.Item col={12}>
+                  <Field.Root name="customTypes">
+                    <Field.Label>
+                      {formatMessage({ id: t("settings.strapi.customTypes"), defaultMessage: "Custom post types — restBase:api::uid.uid, comma separated" })}
+                    </Field.Label>
+                    <TextInput
+                      placeholder="portfolio:api::project.project, event:api::event.event"
+                      value={settings.customTypes.join(", ")}
+                      onChange={(e: { target: { value: string } }) =>
+                        setSettings((s) => ({
+                          ...s,
+                          customTypes: e.target.value
+                            .split(",")
+                            .map((v) => v.trim())
+                            .filter(Boolean),
+                        }))
+                      }
+                    />
+                  </Field.Root>
+                </Grid.Item>
+                <Grid.Item col={6} s={12}>
                   <Field.Root name="concurrency">
                     <Field.Label>
                       {formatMessage({ id: t("settings.options.concurrency"), defaultMessage: "Concurrency" })}
@@ -354,8 +413,8 @@ const HomePage = () => {
             <Typography variant="delta" tag="h2">
               Content to migrate
             </Typography>
-            <Flex gap={6} paddingTop={4}>
-              {(["media", "posts", "pages"] as const).map((k) => (
+            <Flex gap={6} paddingTop={4} wrap="wrap">
+              {KINDS.map((k) => (
                 <Checkbox
                   key={k}
                   checked={only.includes(k)}
@@ -365,6 +424,33 @@ const HomePage = () => {
                 </Checkbox>
               ))}
             </Flex>
+            <Flex gap={6} paddingTop={4} wrap="wrap">
+              <Checkbox
+                checked={settings.statuses.length > 1}
+                onCheckedChange={(v: boolean) =>
+                  setSettings((s) => ({
+                    ...s,
+                    statuses: v ? ["publish", "draft", "pending", "future", "private"] : ["publish"],
+                  }))
+                }
+              >
+                Include drafts and scheduled (imported as Strapi drafts)
+              </Checkbox>
+              <Checkbox
+                checked={settings.htmlFallback}
+                onCheckedChange={(v: boolean) =>
+                  setSettings((s) => ({ ...s, htmlFallback: Boolean(v) }))
+                }
+              >
+                Recover page-builder content from the public page
+              </Checkbox>
+            </Flex>
+            <Box paddingTop={2}>
+              <Typography variant="pi" textColor="neutral600">
+                Categories, tags and custom types only run when configured above. Settings are
+                saved with the button at the top.
+              </Typography>
+            </Box>
           </Box>
 
           {status !== "idle" && (
@@ -378,7 +464,7 @@ const HomePage = () => {
                 </Typography>
               </Flex>
               <Grid.Root gap={4} paddingTop={4}>
-                {(["media", "posts", "pages"] as const).map((k) => (
+                {KINDS.map((k) => (
                   <Grid.Item key={k} col={4} s={12} direction="column" alignItems="start">
                     <Typography variant="sigma" textColor="neutral600">
                       {k}

@@ -1,5 +1,5 @@
-export { buildConfig, defaults } from "./config.js";
-export type { AppConfig, WpConfig, StrapiConfig } from "./config.js";
+export { buildConfig, defaults, DRAFT_STATUSES } from "./config.js";
+export type { AppConfig, WpConfig, StrapiConfig, CustomTypeConfig } from "./config.js";
 export { WordPressClient } from "./wordpress-client.js";
 export { StrapiClient } from "./strapi-client.js";
 export type { StrapiAdapter } from "./strapi-adapter.js";
@@ -18,4 +18,4 @@ export { extractReadableContent } from "./content-extract.js";
 export type { ExtractedContent } from "./content-extract.js";
 export { StateStore } from "./state.js";
 export type { MediaFormat, MigrationState } from "./state.js";
-export type { WpMedia, WpPage, WpPost, StrapiEntry, StrapiUploadFile } from "./types.js";
+export type { WpMedia, WpPage, WpPost, WpTerm, StrapiEntry, StrapiUploadFile } from "./types.js";
