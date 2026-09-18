@@ -94,6 +94,25 @@ export class WordPressClient {
     }
   }
 
+  /**
+   * How many items an endpoint holds, from WordPress's own X-WP-Total header. Cheap (one
+   * request) and it is what lets a run show "12 / 1651" instead of a count with no end.
+   */
+  async count(
+    restBase: string,
+    query: Record<string, string | number | undefined> = {},
+  ): Promise<number> {
+    try {
+      const { total } = await this.get<unknown[]>(`/${restBase.replace(/^\/+/, "")}`, {
+        ...query,
+        per_page: 1,
+      });
+      return total;
+    } catch {
+      return 0; // an unknown total is better than a failed run
+    }
+  }
+
   /** Hit /posts with per_page=1 to verify the endpoint is reachable and return counts. */
   async probe(): Promise<{ posts: number; pages: number; media: number }> {
     const [posts, pages, media] = await Promise.all([

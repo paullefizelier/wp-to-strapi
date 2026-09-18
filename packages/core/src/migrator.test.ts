@@ -120,6 +120,8 @@ function fakeWp(over: Partial<Record<string, unknown>> = {}) {
       calls.pages.push(restBase);
       return stream<WpPost>([wpPost({ id: 50, slug: "a-project", type: "portfolio" })]);
     },
+    count: async (restBase: string) =>
+      ({ media: 1, categories: 1, tags: 1, posts: 2, pages: 1, portfolio: 1 })[restBase] ?? 0,
     fetchBinary: async () => ({ buffer: Buffer.from("jpeg-bytes"), contentType: "image/jpeg" }),
     fetchPage: vi.fn(async () =>
       `<html><body><div class="entry-content"><h2>Recovered</h2><p>${"body ".repeat(60)}</p>` +
@@ -403,6 +405,32 @@ describe("Migrator", () => {
     expect(
       events.some((e) => e.type === "log" && e.message.includes("no failures")),
     ).toBe(true);
+  });
+
+  it("announces how big each section is before walking it", async () => {
+    const { events } = await run();
+    const starts = events.filter((e) => e.type === "section-start");
+    expect(starts.map((e) => [e.kind, "expected" in e ? e.expected : undefined])).toEqual([
+      ["media", 1],
+      ["categories", 1],
+      ["tags", 1],
+      ["posts", 2],
+      ["pages", 1],
+      ["custom", 1],
+    ]);
+  });
+
+  it("warns once per run, not once per entry, when no media were migrated", async () => {
+    const { events } = await run({}, {});
+    const perRun = events.filter(
+      (e) => e.type === "log" && e.message.includes("No media in the state file"),
+    );
+    const perEntry = events.filter(
+      (e) => e.type === "log" && e.message.includes("media URL(s) still point at WordPress"),
+    );
+    // Media are migrated in this fixture, so neither message applies.
+    expect(perRun).toHaveLength(0);
+    expect(perEntry.length).toBeLessThanOrEqual(2);
   });
 
   it("only runs the kinds asked for", async () => {

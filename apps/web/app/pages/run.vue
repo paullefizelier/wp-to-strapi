@@ -29,6 +29,11 @@ const status = ref<"idle" | "running" | "completed" | "failed">("idle");
 const error = ref<string | null>(null);
 const counters = ref<Record<string, Counter>>({});
 const currentKind = ref<Kind | null>(null);
+const currentItem = ref<string | null>(null);
+const startedAt = ref<number | null>(null);
+const finishedAt = ref<number | null>(null);
+const now = ref(Date.now());
+let ticker: ReturnType<typeof setInterval> | null = null;
 const logFilter = ref<"all" | "problems">("all");
 const failures = ref<Array<{ kind: string; wpId: number; message: string }>>([]);
 const retrying = ref(false);
@@ -81,12 +86,22 @@ function apply(e: MigratorEvent) {
   if (events.value.length > 2000) events.value.splice(0, events.value.length - 2000);
 
   if ("kind" in e && !counters.value[e.kind]) counters.value[e.kind] = emptyCounter();
-  if (e.type === "item-ok") counters.value[e.kind]!.ok += 1;
-  else if (e.type === "item-skip") counters.value[e.kind]!.skipped += 1;
+  if (e.type === "item-ok") {
+    counters.value[e.kind]!.ok += 1;
+    currentItem.value = `${e.kind} #${e.wpId} · ${e.detail}`;
+  } else if (e.type === "item-skip") counters.value[e.kind]!.skipped += 1;
   else if (e.type === "item-error") counters.value[e.kind]!.errors += 1;
-  else if (e.type === "section-start") currentKind.value = e.kind;
-  else if (e.type === "section-end") counters.value[e.kind]!.total = e.total;
-  else if (e.type === "run-end") failures.value = e.failures ?? [];
+  else if (e.type === "section-start") {
+    currentKind.value = e.kind;
+    // The expected size arrives up front, so progress has a denominator from the first item.
+    if (e.expected) counters.value[e.kind]!.total = e.expected;
+  } else if (e.type === "section-end") counters.value[e.kind]!.total = e.total;
+  else if (e.type === "run-start") startedAt.value = Date.parse(e.at) || Date.now();
+  else if (e.type === "run-end") {
+    failures.value = e.failures ?? [];
+    finishedAt.value = Date.parse(e.at) || Date.now();
+    currentItem.value = null;
+  }
 
   if (autoScroll.value) {
     nextTick(() => logEnd.value?.scrollIntoView({ behavior: "smooth", block: "end" }));
@@ -94,6 +109,32 @@ function apply(e: MigratorEvent) {
 }
 
 const started = computed(() => Object.keys(counters.value).length > 0);
+
+const elapsedMs = computed(() =>
+  startedAt.value ? (finishedAt.value ?? now.value) - startedAt.value : 0,
+);
+
+function humanDuration(ms: number) {
+  if (ms <= 0) return "0 s";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ${String(s % 60).padStart(2, "0")} s`;
+  return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+}
+
+/** Entries per second over the whole run — steady enough to project a finish time. */
+const rate = computed(() => {
+  const done = totals.value.ok + totals.value.skipped + totals.value.errors;
+  return elapsedMs.value > 1000 ? done / (elapsedMs.value / 1000) : 0;
+});
+
+const remaining = computed(() => {
+  const done = totals.value.ok + totals.value.skipped + totals.value.errors;
+  const left = totals.value.total - done;
+  if (status.value !== "running" || left <= 0 || rate.value <= 0) return null;
+  return humanDuration((left / rate.value) * 1000);
+});
 const totals = computed(() =>
   Object.values(counters.value).reduce(
     (acc, c) => ({
@@ -175,7 +216,14 @@ onMounted(() => {
   });
 });
 
-onUnmounted(() => es?.close());
+onMounted(() => {
+  ticker = setInterval(() => (now.value = Date.now()), 1000);
+});
+
+onUnmounted(() => {
+  es?.close();
+  if (ticker) clearInterval(ticker);
+});
 </script>
 
 <template>
@@ -190,12 +238,24 @@ onUnmounted(() => es?.close());
         </div>
         <p class="text-muted mt-1">
           <template v-if="status === 'running' && currentKind">
-            En cours : {{ KIND_LABELS[currentKind] }}…
+            {{ KIND_LABELS[currentKind] }} en cours · {{ humanDuration(elapsedMs) }} écoulées<template
+              v-if="remaining"
+            >, ~{{ remaining }} restantes</template>
           </template>
           <template v-else-if="status === 'completed'">
-            {{ totals.ok }} entrées écrites, {{ totals.errors }} en erreur.
+            {{ totals.ok }} entrées écrites, {{ totals.errors }} en erreur, en
+            {{ humanDuration(elapsedMs) }}.
+          </template>
+          <template v-else-if="status === 'failed'">
+            Interrompue après {{ humanDuration(elapsedMs) }}.
           </template>
           <template v-else>Progression en direct.</template>
+        </p>
+        <p
+          v-if="status === 'running' && currentItem"
+          class="text-xs text-dimmed font-mono mt-1 truncate max-w-xl"
+        >
+          {{ currentItem }}
         </p>
       </div>
       <UButton to="/" color="neutral" variant="subtle" icon="i-lucide-sliders-horizontal">
@@ -232,6 +292,10 @@ onUnmounted(() => es?.close());
               {{ totals.ok + totals.skipped + totals.errors }}
               <template v-if="totals.total"> / {{ totals.total }}</template>
               entrées
+              <template v-if="overallProgress !== undefined"> · {{ overallProgress }} %</template>
+              <template v-if="status === 'running' && rate > 0">
+                · {{ rate.toFixed(1) }}/s
+              </template>
             </span>
           </div>
           <UProgress

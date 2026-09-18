@@ -10,6 +10,8 @@ export interface RunState {
   startedAt: string;
   endedAt: string | null;
   events: MigratorEvent[];
+  /** How many events were dropped off the front, so absolute positions stay meaningful. */
+  dropped: number;
   status: "running" | "completed" | "failed";
   error?: string;
   bus: EventEmitter;
@@ -30,6 +32,7 @@ export function startRun(): RunState {
     startedAt: new Date().toISOString(),
     endedAt: null,
     events: [],
+    dropped: 0,
     status: "running",
     bus: new EventEmitter(),
   };
@@ -41,7 +44,9 @@ export function startRun(): RunState {
 export function recordEvent(run: RunState, e: MigratorEvent): void {
   run.events.push(e);
   // Cap memory: keep the last 5000 events (plenty for normal runs).
-  if (run.events.length > 5000) run.events.splice(0, run.events.length - 5000);
+  if (run.events.length > 5000) {
+    run.dropped += run.events.splice(0, run.events.length - 5000).length;
+  }
   run.bus.emit("event", e);
 }
 

@@ -41,7 +41,7 @@ export interface MigrateOptions {
 
 export type MigratorEvent =
   | { type: "run-start"; at: string; kinds: Kind[] }
-  | { type: "section-start"; kind: Kind }
+  | { type: "section-start"; kind: Kind; expected?: number }
   | { type: "section-end"; kind: Kind; total: number }
   | { type: "item-skip"; kind: Kind; wpId: number; reason: string }
   | { type: "item-ok"; kind: Kind; wpId: number; detail: string }
@@ -104,6 +104,8 @@ export class Migrator extends EventEmitter {
   private readonly state: StateStore;
   private readonly limit: ReturnType<typeof pLimit>;
   private retryFailed = false;
+  /** Whether this run has a media map to rewrite against. */
+  private mediaMigrated = false;
 
   constructor(private readonly cfg: AppConfig, deps: MigratorDeps = {}) {
     super();
@@ -251,6 +253,16 @@ export class Migrator extends EventEmitter {
 
     // Media and taxonomies first: posts reference both.
     if (kinds.includes("media")) await this.migrateMedia();
+    this.mediaMigrated = Object.keys(this.state.get().media).length > 0;
+    if (!this.mediaMigrated && (kinds.includes("posts") || kinds.includes("pages"))) {
+      this.fire({
+        type: "log",
+        level: "warn",
+        message:
+          "No media in the state file: every media URL in the imported content will keep " +
+          "pointing at WordPress. Run the media step first (or with this one).",
+      });
+    }
     if (kinds.includes("categories")) {
       await this.migrateTerms("categories", this.cfg.strapi.categoryUid, this.cfg.strapi.categoryPluralPath);
     }
@@ -270,6 +282,13 @@ export class Migrator extends EventEmitter {
       summary: this.summary(),
       failures,
     });
+  }
+
+  /** How many entries a section will walk, honouring the configured statuses and any retry. */
+  private async expectedCount(restBase: string): Promise<number> {
+    const scope = this.retryScope(restBase === "posts" || restBase === "pages" ? restBase : `custom:${restBase}`);
+    if (scope) return scope.filter((id) => id > 0).length;
+    return this.wp.count(restBase, { status: this.cfg.statuses.join(",") });
   }
 
   /** On a retry run, narrow a listing to the ids that failed; otherwise take everything. */
@@ -342,7 +361,7 @@ export class Migrator extends EventEmitter {
     pluralOverride: string | undefined,
   ): Promise<void> {
     if (!uid) return;
-    this.fire({ type: "section-start", kind });
+    this.fire({ type: "section-start", kind, expected: await this.wp.count(kind) });
     const tasks: Promise<void>[] = [];
     let count = 0;
     for await (const term of this.wp.terms(kind)) {
@@ -396,7 +415,10 @@ export class Migrator extends EventEmitter {
   // ----- Custom post types -----
 
   private async migrateCustomTypes(): Promise<void> {
-    this.fire({ type: "section-start", kind: "custom" });
+    const expected = (
+      await Promise.all(this.cfg.customTypes.map((t) => this.expectedCount(t.restBase)))
+    ).reduce((a, b) => a + b, 0);
+    this.fire({ type: "section-start", kind: "custom", expected });
     let count = 0;
     for (const type of this.cfg.customTypes) {
       const tasks: Promise<void>[] = [];
@@ -520,7 +542,11 @@ export class Migrator extends EventEmitter {
   // ----- Media -----
 
   private async migrateMedia(): Promise<void> {
-    this.fire({ type: "section-start", kind: "media" });
+    this.fire({
+      type: "section-start",
+      kind: "media",
+      expected: await this.wp.count("media", { status: "inherit" }),
+    });
     const tasks: Promise<void>[] = [];
     let count = 0;
     for await (const m of this.wp.media()) {
@@ -586,7 +612,11 @@ export class Migrator extends EventEmitter {
   // ----- Posts & Pages -----
 
   private async migratePosts(): Promise<void> {
-    this.fire({ type: "section-start", kind: "posts" });
+    this.fire({
+      type: "section-start",
+      kind: "posts",
+      expected: await this.expectedCount("posts"),
+    });
     const tasks: Promise<void>[] = [];
     let count = 0;
     for await (const p of this.wp.posts(this.cfg.statuses, this.retryScope("posts"))) {
@@ -598,7 +628,11 @@ export class Migrator extends EventEmitter {
   }
 
   private async migratePages(): Promise<void> {
-    this.fire({ type: "section-start", kind: "pages" });
+    this.fire({
+      type: "section-start",
+      kind: "pages",
+      expected: await this.expectedCount("pages"),
+    });
     const tasks: Promise<void>[] = [];
     let count = 0;
     for await (const p of this.wp.pages(this.cfg.statuses, this.retryScope("pages"))) {
@@ -723,7 +757,11 @@ export class Migrator extends EventEmitter {
       );
     }
 
-    const unresolved = findUnresolvedMediaUrls(rewritten, this.cfg.wp.baseUrl);
+    // With no media map at all, every entry would repeat the same warning; the run says it
+    // once instead (see `warnAboutMissingMedia`).
+    const unresolved = this.mediaMigrated
+      ? findUnresolvedMediaUrls(rewritten, this.cfg.wp.baseUrl)
+      : [];
     if (unresolved.length > 0) {
       warnings.push(
         `${label}: ${unresolved.length} media URL(s) still point at WordPress ` +
