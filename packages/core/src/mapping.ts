@@ -245,8 +245,11 @@ export function applyMapping(
 }
 
 /**
- * The built-in mapping for posts, pages and custom types — today's behaviour, expressed as
- * configuration. Editing a copy of this is how a migration gets customised.
+ * The built-in mapping for posts, pages and custom types.
+ *
+ * `publishedAt` is deliberately absent: Strapi v5 strips it from any payload and decides
+ * publication from the write's `status`, which the migrator sets from the WordPress status.
+ * To keep the original WordPress date, map `$publishedAt` onto a date field of your own.
  */
 export function defaultEntryMapping(): FieldMapping[] {
   return [
@@ -255,7 +258,6 @@ export function defaultEntryMapping(): FieldMapping[] {
     { target: "content", source: "$content", transforms: ["rewriteMedia"] },
     { target: "excerpt", source: "excerpt.rendered", transforms: ["decodeEntities"] },
     { target: "wpId", source: "id" },
-    { target: "publishedAt", source: "$publishedAt" },
     { target: "cover", source: "featured_media", transforms: ["mediaId"], omitEmpty: true },
     {
       target: "categories",

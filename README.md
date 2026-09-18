@@ -92,6 +92,17 @@ Create two content-types (default UIDs `api::post.post` and `api::page.page` —
 | `cover`   | Media (single)               | receives the WP featured image               |
 | `wpId`    | Number (integer), **unique** | correlation key — makes re-imports idempotent |
 
+### Publication state
+
+Strapi v5 decides publication from the write's `status`, and the Document Service **strips any
+`publishedAt` you send**. So the migrator publishes what WordPress had published and leaves
+everything else as a draft, rather than writing a date that would be discarded. To keep the
+original WordPress date, map the `$publishedAt` virtual source onto a date field of your own:
+
+```jsonc
+{ "target": "datePublicationWp", "source": "$publishedAt" }
+```
+
 CLI and Nuxt UI need a **Full-access API token** in Strapi. The plugin doesn't — it uses `strapi.documents()` in-process.
 
 ## How it works

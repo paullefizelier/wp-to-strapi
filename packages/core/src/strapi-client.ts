@@ -1,6 +1,7 @@
 import { request, FormData, type Dispatcher } from "undici";
 import type { TargetField, TargetSchema } from "./introspect.js";
 import { HttpStatusError, parseRetryAfter, withRetry } from "./retry.js";
+import type { WriteOptions } from "./strapi-adapter.js";
 import type { StrapiEntry, StrapiUploadFile } from "./types.js";
 
 type HttpMethod = Dispatcher.HttpMethod;
@@ -22,6 +23,11 @@ export interface StrapiClientOptions {
  *  - Responses are flat: { data: { id, documentId, ...attrs } } (no nested `attributes`).
  *  - Media upload is unchanged from v4: POST /api/upload (multipart/form-data).
  */
+/** v5 reads the publication target from the query string, not from the payload. */
+function statusQuery(options?: WriteOptions): string {
+  return options?.status ? `?status=${options.status}` : "";
+}
+
 export class StrapiClient {
   private readonly retry: { retries: number; onRetry?: StrapiClientOptions["onRetry"] };
 
@@ -213,10 +219,11 @@ export class StrapiClient {
     uid: string,
     data: T,
     pluralOverride?: string,
+    options?: WriteOptions,
   ): Promise<StrapiEntry> {
     const resp = await this.json<{ data: StrapiEntry }>(
       "POST",
-      this.collectionUrl(uid, pluralOverride),
+      `${this.collectionUrl(uid, pluralOverride)}${statusQuery(options)}`,
       { data },
     );
     return resp.data;
@@ -227,26 +234,17 @@ export class StrapiClient {
     documentId: string,
     data: T,
     pluralOverride?: string,
+    options?: WriteOptions,
   ): Promise<StrapiEntry> {
     const resp = await this.json<{ data: StrapiEntry }>(
       "PUT",
-      `${this.collectionUrl(uid, pluralOverride)}/${documentId}`,
+      `${this.collectionUrl(uid, pluralOverride)}/${documentId}${statusQuery(options)}`,
       { data },
     );
     return resp.data;
   }
 
-  async publish(
-    uid: string,
-    documentId: string,
-    pluralOverride?: string,
-  ): Promise<void> {
-    // In Strapi v5, updating with publishedAt set publishes. Keep it simple and explicit.
-    await this.update(
-      uid,
-      documentId,
-      { publishedAt: new Date().toISOString() } as object,
-      pluralOverride,
-    );
+  async publish(uid: string, documentId: string, pluralOverride?: string): Promise<void> {
+    await this.update(uid, documentId, {} as object, pluralOverride, { status: "published" });
   }
 }

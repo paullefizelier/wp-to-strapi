@@ -19,7 +19,7 @@ import {
   type FieldMapping,
 } from "./mapping.js";
 import { StateStore, type MediaFormat } from "./state.js";
-import type { StrapiAdapter } from "./strapi-adapter.js";
+import type { StrapiAdapter, WriteOptions } from "./strapi-adapter.js";
 import { StrapiClient } from "./strapi-client.js";
 import type { StrapiUploadFile, WpMedia, WpPage, WpPost, WpTerm } from "./types.js";
 import { WordPressClient } from "./wordpress-client.js";
@@ -294,8 +294,10 @@ export class Migrator extends EventEmitter {
         pluralOverride,
       );
       const saved = existing
-        ? await this.strapi.update(uid, existing.documentId, data, pluralOverride)
-        : await this.strapi.create(uid, data, pluralOverride);
+        ? await this.strapi.update(uid, existing.documentId, data, pluralOverride, {
+            status: "published",
+          })
+        : await this.strapi.create(uid, data, pluralOverride, { status: "published" });
       this.state.setTerm(kind, term.id, saved.documentId);
       await this.state.persist();
       this.fire({ type: "item-ok", kind, wpId: term.id, detail: `${term.slug} → ${saved.documentId}` });
@@ -645,6 +647,9 @@ export class Migrator extends EventEmitter {
     if (this.cfg.dryRun) {
       return { documentId: "dry-run" };
     }
+    // Strapi v5 publishes by `status`; a `publishedAt` in the payload is stripped and the
+    // write defaults to a draft. Anything not published in WordPress stays a draft here.
+    const write: WriteOptions = { status: p.status === "publish" ? "published" : "draft" };
     const existing = await this.strapi.findOneBy(
       uid,
       this.cfg.strapi.correlationField,
@@ -652,10 +657,16 @@ export class Migrator extends EventEmitter {
       pluralOverride,
     );
     if (existing) {
-      const updated = await this.strapi.update(uid, existing.documentId, data, pluralOverride);
+      const updated = await this.strapi.update(
+        uid,
+        existing.documentId,
+        data,
+        pluralOverride,
+        write,
+      );
       return { documentId: updated.documentId };
     }
-    const created = await this.strapi.create(uid, data, pluralOverride);
+    const created = await this.strapi.create(uid, data, pluralOverride, write);
     return { documentId: created.documentId };
   }
 

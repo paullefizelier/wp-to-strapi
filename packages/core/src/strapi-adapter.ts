@@ -1,4 +1,12 @@
 import type { TargetSchema } from "./introspect.js";
+
+/**
+ * Strapi v5 decides publication by `status`, never by a `publishedAt` in the payload: the
+ * Document Service strips that attribute and defaults every write to a draft.
+ */
+export interface WriteOptions {
+  status?: "draft" | "published";
+}
 import type { StrapiEntry, StrapiUploadFile } from "./types.js";
 
 /**
@@ -29,6 +37,7 @@ export interface StrapiAdapter {
     uid: string,
     data: T,
     pluralOverride?: string,
+    options?: WriteOptions,
   ): Promise<StrapiEntry>;
 
   update<T extends object>(
@@ -36,6 +45,7 @@ export interface StrapiAdapter {
     documentId: string,
     data: T,
     pluralOverride?: string,
+    options?: WriteOptions,
   ): Promise<StrapiEntry>;
 
   /**

@@ -49,7 +49,11 @@ const MEDIA: WpMedia = {
 
 /** Records everything the migrator sends to Strapi. */
 function fakeStrapi() {
-  const created: Array<{ uid: string; data: Record<string, unknown> }> = [];
+  const created: Array<{
+    uid: string;
+    data: Record<string, unknown>;
+    options?: { status?: string };
+  }> = [];
   const adapter: StrapiAdapter = {
     async uploadFile(args) {
       return {
@@ -63,8 +67,8 @@ function fakeStrapi() {
     async findOneBy(): Promise<StrapiEntry | null> {
       return null;
     },
-    async create(uid, data): Promise<StrapiEntry> {
-      created.push({ uid, data: data as Record<string, unknown> });
+    async create(uid, data, _plural, options): Promise<StrapiEntry> {
+      created.push({ uid, data: data as Record<string, unknown>, options });
       return { id: created.length, documentId: `doc-${uid}-${created.length}` };
     },
     async update(_uid, documentId): Promise<StrapiEntry> {
@@ -193,12 +197,33 @@ describe("Migrator", () => {
     expect(post?.data.title).toBe("Cafés & co");
   });
 
-  it("imports non-published entries as Strapi drafts", async () => {
+  it("publishes through `status`, which is the only thing Strapi v5 honours", async () => {
     const { created } = await run();
     const draft = created.find((c) => c.data.slug === "draft-one");
-    expect(draft?.data.publishedAt).toBeNull();
     const published = created.find((c) => c.data.slug === "with-image");
-    expect(published?.data.publishedAt).toBe("2024-05-01T08:00:00Z");
+    expect(draft?.options?.status).toBe("draft");
+    expect(published?.options?.status).toBe("published");
+    // A publishedAt in the payload is stripped by the Document Service, so we never send one.
+    expect(published?.data).not.toHaveProperty("publishedAt");
+  });
+
+  it("keeps the WordPress publication date available to a mapping", async () => {
+    const { created } = await run({
+      mapping: {
+        post: [
+          { target: "wpId", source: "id" },
+          { target: "dateOriginale", source: "$publishedAt" },
+        ],
+      },
+    });
+    const published = created.find((c) => c.data.wpId === 1);
+    expect(published?.data.dateOriginale).toBe("2024-05-01T08:00:00Z");
+  });
+
+  it("publishes taxonomy terms rather than leaving them as drafts", async () => {
+    const { created } = await run();
+    const category = created.find((c) => c.uid === "api::category.category");
+    expect(category?.options?.status).toBe("published");
   });
 
   it("passes the configured statuses through to WordPress", async () => {

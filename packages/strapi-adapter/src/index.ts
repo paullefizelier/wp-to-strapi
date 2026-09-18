@@ -3,6 +3,7 @@ import type {
   StrapiEntry,
   StrapiUploadFile,
   TargetSchema,
+  WriteOptions,
 } from "@paullefizelier/wp-to-strapi-core";
 
 /**
@@ -118,9 +119,15 @@ export class NativeStrapiAdapter implements StrapiAdapter {
     return found ? { id: found.id, documentId: found.documentId } : null;
   }
 
-  async create<T extends object>(uid: string, data: T): Promise<StrapiEntry> {
+  async create<T extends object>(
+    uid: string,
+    data: T,
+    _pluralOverride?: string,
+    options?: WriteOptions,
+  ): Promise<StrapiEntry> {
     const created = (await this.strapi.documents(uid).create({
       data: data as Record<string, unknown>,
+      ...(options?.status ? { status: options.status } : {}),
     })) as { id: number; documentId: string };
     return { id: created.id, documentId: created.documentId };
   }
@@ -129,10 +136,13 @@ export class NativeStrapiAdapter implements StrapiAdapter {
     uid: string,
     documentId: string,
     data: T,
+    _pluralOverride?: string,
+    options?: WriteOptions,
   ): Promise<StrapiEntry> {
     const updated = (await this.strapi.documents(uid).update({
       documentId,
       data: data as Record<string, unknown>,
+      ...(options?.status ? { status: options.status } : {}),
     })) as { id: number; documentId: string };
     return { id: updated.id, documentId: updated.documentId };
   }
