@@ -14,6 +14,11 @@ export interface WordPressClientOptions {
   onRetry?: (attempt: number, delayMs: number, reason: string) => void;
 }
 
+/** `include` narrows a listing to specific ids — how a retry fetches only what failed. */
+function includeQuery(include?: ReadonlyArray<number>): Record<string, string> {
+  return include && include.length > 0 ? { include: include.join(",") } : {};
+}
+
 export class WordPressClient {
   private readonly baseUrl: string;
   private readonly authHeader?: string;
@@ -99,21 +104,35 @@ export class WordPressClient {
     return { posts: posts.total, pages: pages.total, media: media.total };
   }
 
-  posts(statuses: ReadonlyArray<string> = ["publish"]): AsyncGenerator<WpPost> {
-    return this.paginate<WpPost>("/posts", { status: statuses.join(",") });
+  posts(
+    statuses: ReadonlyArray<string> = ["publish"],
+    include?: ReadonlyArray<number>,
+  ): AsyncGenerator<WpPost> {
+    return this.paginate<WpPost>("/posts", {
+      status: statuses.join(","),
+      ...includeQuery(include),
+    });
   }
 
-  pages(statuses: ReadonlyArray<string> = ["publish"]): AsyncGenerator<WpPage> {
-    return this.paginate<WpPage>("/pages", { status: statuses.join(",") });
+  pages(
+    statuses: ReadonlyArray<string> = ["publish"],
+    include?: ReadonlyArray<number>,
+  ): AsyncGenerator<WpPage> {
+    return this.paginate<WpPage>("/pages", {
+      status: statuses.join(","),
+      ...includeQuery(include),
+    });
   }
 
   /** Any custom post type exposed under its REST base, e.g. `portfolio`. */
   customType(
     restBase: string,
     statuses: ReadonlyArray<string> = ["publish"],
+    include?: ReadonlyArray<number>,
   ): AsyncGenerator<WpPost> {
     return this.paginate<WpPost>(`/${restBase.replace(/^\/+/, "")}`, {
       status: statuses.join(","),
+      ...includeQuery(include),
     });
   }
 

@@ -14,7 +14,7 @@ export default defineEventHandler(async (event) => {
   if (!parsed.success) {
     throw createError({ statusCode: 400, statusMessage: parsed.error.message });
   }
-  const { kind, restBase, limit, ...config } = parsed.data;
+  const { kind, restBase, limit, retryFailed: _retryFailed, ...config } = parsed.data;
   try {
     const migrator = new Migrator(buildConfig(config));
     return { items: await migrator.preview({ kind, restBase, limit }) };

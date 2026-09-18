@@ -122,9 +122,12 @@ function parsePreviewArgs(argv: string[]): PreviewArgs {
 
 function parseArgs(argv: string[]): MigrateOptions {
   const only: Kind[] = [];
+  let retryFailed = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--only") {
+    if (arg === "--retry-failed") {
+      retryFailed = true;
+    } else if (arg === "--only") {
       const next = argv[i + 1];
       if (!next) throw new Error("--only requires a value");
       for (const v of next.split(",")) {
@@ -134,7 +137,7 @@ function parseArgs(argv: string[]): MigrateOptions {
       i += 1;
     }
   }
-  return only.length > 0 ? { only } : {};
+  return { ...(only.length > 0 ? { only } : {}), ...(retryFailed ? { retryFailed } : {}) };
 }
 
 function wireLogging(m: Migrator): void {
@@ -163,6 +166,10 @@ function wireLogging(m: Migrator): void {
       case "run-end":
         console.log(`\n=== Summary ===`);
         for (const [kind, n] of Object.entries(e.summary)) console.log(`  ${kind}: ${n}`);
+        if (e.failures.length > 0) {
+          console.warn(`  ${e.failures.length} entrée(s) en échec — voir le rapport ci-dessus.`);
+          process.exitCode = 1;
+        }
         break;
     }
   });
@@ -188,7 +195,7 @@ async function main(): Promise<void> {
     console.error(
       `Unknown command: ${command}.\n` +
         `Usage:\n` +
-        `  wp-to-strapi migrate [--only media,categories,tags,posts,pages,custom]\n` +
+        `  wp-to-strapi migrate [--only media,categories,tags,posts,pages,custom] [--retry-failed]\n` +
         `  wp-to-strapi preview [--kind posts|pages|categories|tags|custom] [--rest-base <base>] [--limit 3]`,
     );
     process.exit(1);

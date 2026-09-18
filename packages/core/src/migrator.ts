@@ -35,6 +35,8 @@ export type Kind = "media" | "categories" | "tags" | "posts" | "pages" | "custom
 
 export interface MigrateOptions {
   only?: ReadonlyArray<Kind>;
+  /** Re-run only the entries the previous run recorded as failed. */
+  retryFailed?: boolean;
 }
 
 export type MigratorEvent =
@@ -56,6 +58,8 @@ export type MigratorEvent =
         tags: number;
         custom: number;
       };
+      /** Entries still failing after this run, so a caller can act on them. */
+      failures: Array<{ kind: string; wpId: number; message: string }>;
     };
 
 export declare interface Migrator {
@@ -99,6 +103,7 @@ export class Migrator extends EventEmitter {
   private readonly strapi: StrapiAdapter;
   private readonly state: StateStore;
   private readonly limit: ReturnType<typeof pLimit>;
+  private retryFailed = false;
 
   constructor(private readonly cfg: AppConfig, deps: MigratorDeps = {}) {
     super();
@@ -208,6 +213,27 @@ export class Migrator extends EventEmitter {
   async run(opts: MigrateOptions = {}): Promise<void> {
     this.assertMappingValid();
     await this.state.load();
+    this.retryFailed = opts.retryFailed === true;
+    if (this.retryFailed) {
+      const pending = this.state.allFailures().length;
+      this.fire({
+        type: "log",
+        level: "info",
+        message:
+          pending > 0
+            ? `Retrying ${pending} entr${pending === 1 ? "y" : "ies"} that failed previously.`
+            : "Nothing to retry — the state file records no failures.",
+      });
+      if (pending === 0) {
+        this.fire({
+          type: "run-end",
+          at: new Date().toISOString(),
+          summary: this.summary(),
+          failures: [],
+        });
+        return;
+      }
+    }
     const configured = this.configuredKinds();
     const kinds = opts.only ? configured.filter((k) => opts.only?.includes(k)) : configured;
     this.fire({ type: "run-start", at: new Date().toISOString(), kinds });
@@ -236,18 +262,75 @@ export class Migrator extends EventEmitter {
     if (kinds.includes("custom")) await this.migrateCustomTypes();
 
     await this.state.persist();
-    const s = this.state.get();
+    const failures = this.state.allFailures();
+    this.reportFailures(failures);
     this.fire({
       type: "run-end",
       at: new Date().toISOString(),
-      summary: {
-        media: Object.keys(s.media).length,
-        posts: Object.keys(s.posts).length,
-        pages: Object.keys(s.pages).length,
-        categories: Object.keys(s.categories).length,
-        tags: Object.keys(s.tags).length,
-        custom: Object.values(s.custom).reduce((n, bucket) => n + Object.keys(bucket).length, 0),
-      },
+      summary: this.summary(),
+      failures,
+    });
+  }
+
+  /** On a retry run, narrow a listing to the ids that failed; otherwise take everything. */
+  private retryScope(kind: string): number[] | undefined {
+    if (!this.retryFailed) return undefined;
+    // An empty list would read as "no filter", so fall back to an id that matches nothing.
+    const ids = this.state.failedIds(kind);
+    return ids.length > 0 ? ids : [-1];
+  }
+
+  private summary() {
+    const s = this.state.get();
+    return {
+      media: Object.keys(s.media).length,
+      posts: Object.keys(s.posts).length,
+      pages: Object.keys(s.pages).length,
+      categories: Object.keys(s.categories).length,
+      tags: Object.keys(s.tags).length,
+      custom: Object.values(s.custom).reduce((n, bucket) => n + Object.keys(bucket).length, 0),
+    };
+  }
+
+  /**
+   * Group what failed by cause. Three hundred identical "403 Forbidden" lines scrolled past in
+   * the log are one problem, and reading them one by one is nobody's idea of a report.
+   */
+  private reportFailures(failures: Array<{ kind: string; wpId: number; message: string }>): void {
+    if (failures.length === 0) return;
+    const groups = new Map<string, { count: number; kinds: Set<string>; ids: number[] }>();
+    for (const f of failures) {
+      // Collapse the parts that differ per entry so identical causes land together.
+      const cause = f.message
+        .replace(/\b\d{4}-\d{2}-\d{2}T[\d:.]+Z?\b/g, "<date>")
+        .replace(/\/\d+\b/g, "/<id>")
+        .replace(/\b\d{3,}\b/g, "<n>")
+        .slice(0, 160);
+      const group = groups.get(cause) ?? { count: 0, kinds: new Set<string>(), ids: [] };
+      group.count += 1;
+      group.kinds.add(f.kind);
+      if (group.ids.length < 5) group.ids.push(f.wpId);
+      groups.set(cause, group);
+    }
+
+    this.fire({
+      type: "log",
+      level: "error",
+      message: `${failures.length} entr${failures.length === 1 ? "y" : "ies"} failed, grouped by cause:`,
+    });
+    for (const [cause, g] of [...groups.entries()].sort((a, b) => b[1].count - a[1].count)) {
+      this.fire({
+        type: "log",
+        level: "error",
+        message:
+          `  ${g.count}× [${[...g.kinds].join(", ")}] ${cause} ` +
+          `(ids ${g.ids.join(", ")}${g.count > g.ids.length ? ", …" : ""})`,
+      });
+    }
+    this.fire({
+      type: "log",
+      level: "info",
+      message: "Re-run with retryFailed (CLI: --retry-failed) to retry just these.",
     });
   }
 
@@ -276,6 +359,7 @@ export class Migrator extends EventEmitter {
     uid: string,
     pluralOverride?: string,
   ): Promise<void> {
+    if (this.retryFailed && !this.state.failedIds(kind).includes(term.id)) return;
     try {
       const mapped = applyMapping(term, this.mappingFor(kind === "tags" ? "tag" : "category"), {
         state: this.state.get(),
@@ -299,9 +383,12 @@ export class Migrator extends EventEmitter {
           })
         : await this.strapi.create(uid, data, pluralOverride, { status: "published" });
       this.state.setTerm(kind, term.id, saved.documentId);
+      this.state.clearFailure(kind, term.id);
       await this.state.persist();
       this.fire({ type: "item-ok", kind, wpId: term.id, detail: `${term.slug} → ${saved.documentId}` });
     } catch (err) {
+      this.state.recordFailure(kind, term.id, (err as Error).message);
+      await this.state.persist();
       this.fire({ type: "item-error", kind, wpId: term.id, message: (err as Error).message });
     }
   }
@@ -314,7 +401,11 @@ export class Migrator extends EventEmitter {
     for (const type of this.cfg.customTypes) {
       const tasks: Promise<void>[] = [];
       try {
-        for await (const entry of this.wp.customType(type.restBase, this.cfg.statuses)) {
+        for await (const entry of this.wp.customType(
+          type.restBase,
+          this.cfg.statuses,
+          this.retryScope(`custom:${type.restBase}`),
+        )) {
           count += 1;
           tasks.push(this.limit(() => this.migrateOneCustom(entry, type)));
         }
@@ -334,6 +425,7 @@ export class Migrator extends EventEmitter {
     try {
       const { documentId } = await this.upsertEntry(type.uid, p, type.pluralPath, "post", type.restBase);
       this.state.setCustom(type.restBase, p.id, documentId);
+      this.state.clearFailure(`custom:${type.restBase}`, p.id);
       await this.state.persist();
       this.fire({
         type: "item-ok",
@@ -342,6 +434,8 @@ export class Migrator extends EventEmitter {
         detail: `${type.restBase}/${p.slug} → ${documentId}`,
       });
     } catch (err) {
+      this.state.recordFailure(`custom:${type.restBase}`, p.id, (err as Error).message);
+      await this.state.persist();
       this.fire({ type: "item-error", kind: "custom", wpId: p.id, message: (err as Error).message });
     }
   }
@@ -438,6 +532,7 @@ export class Migrator extends EventEmitter {
   }
 
   private async migrateOneMedia(m: WpMedia): Promise<void> {
+    if (this.retryFailed && !this.state.failedIds("media").includes(m.id)) return;
     if (this.state.get().media[m.id]) {
       this.fire({ type: "item-skip", kind: "media", wpId: m.id, reason: "already migrated" });
       return;
@@ -473,9 +568,12 @@ export class Migrator extends EventEmitter {
         m.source_url,
         toMediaFormats(uploaded),
       );
+      this.state.clearFailure("media", m.id);
       await this.state.persist();
       this.fire({ type: "item-ok", kind: "media", wpId: m.id, detail: uploaded.url });
     } catch (err) {
+      this.state.recordFailure("media", m.id, (err as Error).message);
+      await this.state.persist();
       this.fire({
         type: "item-error",
         kind: "media",
@@ -491,7 +589,7 @@ export class Migrator extends EventEmitter {
     this.fire({ type: "section-start", kind: "posts" });
     const tasks: Promise<void>[] = [];
     let count = 0;
-    for await (const p of this.wp.posts(this.cfg.statuses)) {
+    for await (const p of this.wp.posts(this.cfg.statuses, this.retryScope("posts"))) {
       count += 1;
       tasks.push(this.limit(() => this.migrateOnePost(p)));
     }
@@ -503,7 +601,7 @@ export class Migrator extends EventEmitter {
     this.fire({ type: "section-start", kind: "pages" });
     const tasks: Promise<void>[] = [];
     let count = 0;
-    for await (const p of this.wp.pages(this.cfg.statuses)) {
+    for await (const p of this.wp.pages(this.cfg.statuses, this.retryScope("pages"))) {
       count += 1;
       tasks.push(this.limit(() => this.migrateOnePage(p)));
     }
@@ -678,9 +776,12 @@ export class Migrator extends EventEmitter {
         this.cfg.strapi.postPluralPath,
       );
       this.state.setPost(p.id, documentId);
+      this.state.clearFailure("posts", p.id);
       await this.state.persist();
       this.fire({ type: "item-ok", kind: "posts", wpId: p.id, detail: `${p.slug} → ${documentId}` });
     } catch (err) {
+      this.state.recordFailure("posts", p.id, (err as Error).message);
+      await this.state.persist();
       this.fire({
         type: "item-error",
         kind: "posts",
@@ -699,9 +800,12 @@ export class Migrator extends EventEmitter {
         "page",
       );
       this.state.setPage(p.id, documentId);
+      this.state.clearFailure("pages", p.id);
       await this.state.persist();
       this.fire({ type: "item-ok", kind: "pages", wpId: p.id, detail: `${p.slug} → ${documentId}` });
     } catch (err) {
+      this.state.recordFailure("pages", p.id, (err as Error).message);
+      await this.state.persist();
       this.fire({
         type: "item-error",
         kind: "pages",

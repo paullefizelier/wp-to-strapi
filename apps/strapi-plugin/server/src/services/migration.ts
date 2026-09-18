@@ -140,7 +140,7 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => {
   return { items: await migrator.preview(opts) };
     },
 
-    async start(only?: Kind[]): Promise<Run> {
+    async start(only?: Kind[], retryFailed = false): Promise<Run> {
       const cfg = await buildCfg();
       const run = runStoreSvc().start();
       const adapter = new NativeStrapiAdapter(
@@ -152,7 +152,7 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => {
       // Fire-and-forget: the controller returns the run id immediately so the UI can subscribe.
       (async () => {
         try {
-          await migrator.run(only ? { only } : {});
+          await migrator.run({ ...(only ? { only } : {}), ...(retryFailed ? { retryFailed } : {}) });
           runStoreSvc().complete(run);
         } catch (err) {
           runStoreSvc().complete(run, err as Error);

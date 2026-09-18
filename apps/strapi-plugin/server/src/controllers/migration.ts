@@ -6,7 +6,7 @@ export default ({ strapi }: { strapi: Core.Strapi }) => {
   const migrationSvc = () =>
     strapi.plugin("wp-import").service("migration") as {
       testWordPress: () => Promise<unknown>;
-      start: (only?: Kind[]) => Promise<Run>;
+      start: (only?: Kind[], retryFailed?: boolean) => Promise<Run>;
       preview: (opts: { kind?: string; restBase?: string; limit?: number }) => Promise<unknown>;
       wpFields: (restBase: string) => Promise<unknown>;
       strapiFields: (uid: string) => Promise<unknown>;
@@ -36,7 +36,11 @@ export default ({ strapi }: { strapi: Core.Strapi }) => {
       return migrationSvc().strapiFields(uid as string);
     },
 
-    async start(ctx: { request: { body?: { only?: string[] } }; badRequest: (msg: string) => never; conflict?: (msg: string) => never }) {
+    async start(ctx: {
+      request: { body?: { only?: string[]; retryFailed?: boolean } };
+      badRequest: (msg: string) => never;
+      conflict?: (msg: string) => never;
+    }) {
       const body = ctx.request.body ?? {};
       const kinds: Kind[] = ["media", "categories", "tags", "posts", "pages", "custom"];
       const only = (body.only ?? []).filter((k): k is Kind => kinds.includes(k as Kind));
@@ -44,7 +48,10 @@ export default ({ strapi }: { strapi: Core.Strapi }) => {
         ctx.badRequest(`only must include at least one of ${kinds.join("/")}`);
       }
       try {
-        const run = await migrationSvc().start(only.length > 0 ? only : undefined);
+        const run = await migrationSvc().start(
+          only.length > 0 ? only : undefined,
+          body.retryFailed === true,
+        );
         return { id: run.id, startedAt: run.startedAt };
       } catch (err) {
         throw Object.assign(new Error((err as Error).message), { status: 409 });

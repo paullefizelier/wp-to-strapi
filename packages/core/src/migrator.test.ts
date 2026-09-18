@@ -79,7 +79,7 @@ function fakeStrapi() {
 }
 
 function fakeWp(over: Partial<Record<string, unknown>> = {}) {
-  const calls = { pages: [] as string[], statuses: [] as string[] };
+  const calls = { pages: [] as string[], statuses: [] as string[], include: [] as string[] };
   const wp = {
     authenticated: true,
     media: () => stream<WpMedia>([MEDIA]),
@@ -89,8 +89,9 @@ function fakeWp(over: Partial<Record<string, unknown>> = {}) {
           ? [{ id: 3, name: "News", slug: "news", description: "d" }]
           : [{ id: 9, name: "Tag", slug: "tag" }],
       ),
-    posts: (statuses: string[]) => {
+    posts: (statuses: string[], include?: number[]) => {
       calls.statuses.push(statuses.join(","));
+      if (include) calls.include.push(include.join(","));
       return stream<WpPost>([
         wpPost({
           id: 1,
@@ -350,6 +351,58 @@ describe("Migrator", () => {
     );
     await migrator.run({ only: ["posts"] });
     expect(strapi.created[0]?.data).toEqual({ wordpressId: 1 });
+  });
+
+  it("records failures, groups them in the report, and retries just those", async () => {
+    // A Strapi that refuses the first post, then accepts everything on the retry run.
+    let failing = true;
+    const strapi = fakeStrapi();
+    const created = strapi.created;
+    const adapter = {
+      ...strapi.adapter,
+      async create(uid: string, data: Record<string, unknown>, plural?: string, options?: unknown) {
+        if (failing && uid === "api::post.post") throw new Error("Strapi POST /api/posts failed 403: forbidden");
+        return strapi.adapter.create(uid, data, plural, options as never);
+      },
+    };
+    const wp = fakeWp();
+    const events: MigratorEvent[] = [];
+    const migrator = new Migrator(config(), { strapi: adapter, wp: wp.wp });
+    migrator.on("event", (e) => events.push(e));
+    await migrator.run({ only: ["posts"] });
+
+    const end = events.find((e) => e.type === "run-end");
+    expect(end && "failures" in end && end.failures.map((f) => f.wpId).sort()).toEqual([1, 2]);
+    const report = events.filter(
+      (e) => e.type === "log" && e.level === "error" && e.message.includes("×"),
+    );
+    expect(report).toHaveLength(1); // both failures share one cause
+    expect("message" in report[0]! && report[0].message).toContain("2× [posts]");
+
+    // Now retry: only the failed ids are fetched, and the state is cleared once they land.
+    failing = false;
+    const retryEvents: MigratorEvent[] = [];
+    const retry = new Migrator(config(), { strapi: adapter, wp: wp.wp });
+    retry.on("event", (e) => retryEvents.push(e));
+    await retry.run({ retryFailed: true });
+
+    expect(wp.calls.include).toContain("1,2");
+    expect(created.filter((c) => c.uid === "api::post.post")).toHaveLength(2);
+    const retryEnd = retryEvents.find((e) => e.type === "run-end");
+    expect(retryEnd && "failures" in retryEnd && retryEnd.failures).toEqual([]);
+  });
+
+  it("says so and stops when there is nothing to retry", async () => {
+    const strapi = fakeStrapi();
+    const wp = fakeWp();
+    const events: MigratorEvent[] = [];
+    const migrator = new Migrator(config(), { strapi: strapi.adapter, wp: wp.wp });
+    migrator.on("event", (e) => events.push(e));
+    await migrator.run({ retryFailed: true });
+    expect(strapi.created).toEqual([]);
+    expect(
+      events.some((e) => e.type === "log" && e.message.includes("no failures")),
+    ).toBe(true);
   });
 
   it("only runs the kinds asked for", async () => {

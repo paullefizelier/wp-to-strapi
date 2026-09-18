@@ -30,6 +30,44 @@ const error = ref<string | null>(null);
 const counters = ref<Record<string, Counter>>({});
 const currentKind = ref<Kind | null>(null);
 const logFilter = ref<"all" | "problems">("all");
+const failures = ref<Array<{ kind: string; wpId: number; message: string }>>([]);
+const retrying = ref(false);
+const toast = useToast();
+
+/** Same cause, one line — three hundred identical 403s are one problem, not three hundred. */
+const failureGroups = computed(() => {
+  const groups = new Map<string, { count: number; kinds: Set<string>; ids: number[] }>();
+  for (const f of failures.value) {
+    const cause = f.message.replace(/\/\d+\b/g, "/<id>").replace(/\b\d{3,}\b/g, "<n>").slice(0, 160);
+    const g = groups.get(cause) ?? { count: 0, kinds: new Set<string>(), ids: [] };
+    g.count += 1;
+    g.kinds.add(f.kind);
+    if (g.ids.length < 8) g.ids.push(f.wpId);
+    groups.set(cause, g);
+  }
+  return [...groups.entries()]
+    .map(([cause, g]) => ({ cause, count: g.count, kinds: [...g.kinds], ids: g.ids }))
+    .sort((a, b) => b.count - a.count);
+});
+
+async function retryFailed() {
+  retrying.value = true;
+  try {
+    const { config } = useMigrationConfig();
+    await $fetch("/api/migrate", { method: "POST", body: { ...config.value, retryFailed: true } });
+    toast.add({ title: "Reprise lancée", icon: "i-lucide-refresh-cw", color: "success" });
+    window.location.reload();
+  } catch (err) {
+    toast.add({
+      title: "Reprise impossible",
+      description: (err as { statusMessage?: string }).statusMessage ?? String(err),
+      icon: "i-lucide-triangle-alert",
+      color: "error",
+    });
+  } finally {
+    retrying.value = false;
+  }
+}
 const logEnd = ref<HTMLDivElement | null>(null);
 const autoScroll = ref(true);
 
@@ -48,6 +86,7 @@ function apply(e: MigratorEvent) {
   else if (e.type === "item-error") counters.value[e.kind]!.errors += 1;
   else if (e.type === "section-start") currentKind.value = e.kind;
   else if (e.type === "section-end") counters.value[e.kind]!.total = e.total;
+  else if (e.type === "run-end") failures.value = e.failures ?? [];
 
   if (autoScroll.value) {
     nextTick(() => logEnd.value?.scrollIntoView({ behavior: "smooth", block: "end" }));
@@ -241,6 +280,41 @@ onUnmounted(() => es?.close());
           </div>
         </UCard>
       </div>
+
+      <UCard v-if="failures.length > 0">
+        <template #header>
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 class="font-semibold text-highlighted">Rapport d'échecs</h2>
+              <p class="text-sm text-muted mt-0.5">
+                {{ failures.length }} entrée(s) en échec, regroupées par cause.
+              </p>
+            </div>
+            <UButton
+              icon="i-lucide-refresh-cw"
+              :loading="retrying"
+              @click="retryFailed"
+            >
+              Relancer uniquement ces entrées
+            </UButton>
+          </div>
+        </template>
+        <div class="space-y-3">
+          <div
+            v-for="g in failureGroups"
+            :key="g.cause"
+            class="flex items-start gap-3 text-sm"
+          >
+            <UBadge color="error" variant="subtle" class="tabular-nums shrink-0">{{ g.count }}×</UBadge>
+            <div class="min-w-0">
+              <p class="text-toned break-words">{{ g.cause }}</p>
+              <p class="text-xs text-dimmed mt-0.5">
+                {{ g.kinds.join(", ") }} · ids {{ g.ids.join(", ") }}<span v-if="g.count > g.ids.length">, …</span>
+              </p>
+            </div>
+          </div>
+        </div>
+      </UCard>
 
       <UCard>
         <template #header>

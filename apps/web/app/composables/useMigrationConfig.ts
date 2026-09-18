@@ -19,6 +19,7 @@ const empty = (): MigrationConfigInput => ({
   customTypes: [],
   mapping: {},
   only: ["media", "posts", "pages"],
+  retryFailed: false,
 });
 
 /**

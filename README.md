@@ -31,6 +31,8 @@ All three consume the same core engine, emit the same typed `MigratorEvent`s, an
 - **Resilient** — rate limiting, 5xx and dropped sockets are retried with exponential backoff
   (honouring `Retry-After`); anything the server refuses deliberately is not.
 - **Previewable** — see the exact payloads before writing a single entry.
+- **Reportable** — failures are grouped by cause at the end of a run, and
+  `--retry-failed` re-runs only those, fetching just their ids from WordPress.
 - Typed event bus (`MigratorEvent`) — every front-end subscribes to the same stream.
 - **Fully configurable field mapping** — any WordPress path onto any Strapi field, with
   transforms, plus constants applied to every import.
@@ -208,6 +210,20 @@ npm run cli -- preview --kind posts --limit 2
 ```
 
 Both UIs have the same thing behind an **Aperçu / Preview** button next to the mapping editor.
+
+### When something fails
+
+The run ends with the failures grouped by cause rather than three hundred identical lines
+scrolled past in the log:
+
+```
+  2× [posts] Strapi POST /api/posts failed <n>: forbidden (ids 1, 2)
+  Re-run with retryFailed (CLI: --retry-failed) to retry just these.
+```
+
+Failed ids are kept in the state file, so `--retry-failed` (a button in the UI, `retryFailed`
+in the API) fetches only those entries from WordPress — `?include=1,2` — instead of walking the
+whole site again. An entry that succeeds on the retry stops being reported.
 
 ### Picking fields from both sides
 

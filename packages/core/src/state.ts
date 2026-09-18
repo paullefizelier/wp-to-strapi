@@ -21,6 +21,11 @@ export interface MigrationState {
   tags: Record<number, { documentId: string }>;
   /** Custom post types, keyed by their REST base. */
   custom: Record<string, Record<number, { documentId: string }>>;
+  /**
+   * Entries that failed, keyed by kind then WordPress id. Kept so a run can report them at the
+   * end and so the next one can retry just those instead of the whole site.
+   */
+  failures: Record<string, Record<number, { message: string; at: string }>>;
 }
 
 const EMPTY: MigrationState = {
@@ -30,6 +35,7 @@ const EMPTY: MigrationState = {
   categories: {},
   tags: {},
   custom: {},
+  failures: {},
 };
 
 export class StateStore {
@@ -85,6 +91,32 @@ export class StateStore {
     const bucket = (this.state.custom[restBase] ??= {});
     bucket[wpId] = { documentId };
     this.dirty = true;
+  }
+
+  recordFailure(kind: string, wpId: number, message: string): void {
+    const bucket = (this.state.failures[kind] ??= {});
+    bucket[wpId] = { message, at: new Date().toISOString() };
+    this.dirty = true;
+  }
+
+  /** A retried entry that now succeeds should stop being reported. */
+  clearFailure(kind: string, wpId: number): void {
+    const bucket = this.state.failures[kind];
+    if (bucket?.[wpId]) {
+      delete bucket[wpId];
+      if (Object.keys(bucket).length === 0) delete this.state.failures[kind];
+      this.dirty = true;
+    }
+  }
+
+  failedIds(kind: string): number[] {
+    return Object.keys(this.state.failures[kind] ?? {}).map(Number);
+  }
+
+  allFailures(): Array<{ kind: string; wpId: number; message: string }> {
+    return Object.entries(this.state.failures).flatMap(([kind, bucket]) =>
+      Object.entries(bucket).map(([wpId, f]) => ({ kind, wpId: Number(wpId), message: f.message })),
+    );
   }
 
   /**

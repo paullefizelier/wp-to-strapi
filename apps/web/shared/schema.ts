@@ -57,6 +57,8 @@ export const MigrationConfigSchema = z.object({
   only: z
     .array(z.enum(["media", "categories", "tags", "posts", "pages", "custom"]))
     .default(["media", "posts", "pages"]),
+  /** Re-run only what the previous run recorded as failed. */
+  retryFailed: z.boolean().default(false),
 });
 
 export type MigrationConfigInput = z.infer<typeof MigrationConfigSchema>;
