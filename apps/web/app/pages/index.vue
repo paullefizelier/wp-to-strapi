@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Kind } from "@paullefizelier/wp-to-strapi-core";
+import type { ContentTypeSummary } from "@paullefizelier/wp-to-strapi-core/mapping";
 import type { StepperItem } from "@nuxt/ui";
 import { useMigrationConfig } from "~/composables/useMigrationConfig";
 
@@ -8,11 +9,63 @@ definePageMeta({ title: "Configuration" });
 const { config } = useMigrationConfig();
 const toast = useToast();
 
+/** $fetch hides the server's reason behind "400" — dig the statusMessage out. */
+function errorText(err: unknown): string {
+  const e = err as { statusMessage?: string; data?: { statusMessage?: string; message?: string }; message?: string };
+  return e.data?.statusMessage ?? e.statusMessage ?? e.data?.message ?? e.message ?? String(err);
+}
+
 const testingWp = ref(false);
 const testingStrapi = ref(false);
 const starting = ref(false);
 const wpResult = ref<{ ok: boolean; message: string } | null>(null);
 const strapiResult = ref<{ ok: boolean; message: string } | null>(null);
+const contentTypes = ref<ContentTypeSummary[]>([]);
+const loadingTypes = ref(false);
+
+/** Offer the real content types; a UID typed by hand stays valid and stays in the list. */
+const uidItems = computed(() => {
+  const discovered = contentTypes.value
+    .filter((ct) => ct.kind === "collectionType")
+    .map((ct) => ({ label: `${ct.displayName} — ${ct.uid}`, value: ct.uid }));
+  const typed = [
+    config.value.strapi.postUid,
+    config.value.strapi.pageUid,
+    config.value.strapi.categoryUid,
+    config.value.strapi.tagUid,
+  ].filter((uid): uid is string => Boolean(uid) && !discovered.some((d) => d.value === uid));
+  return [...discovered, ...typed.map((uid) => ({ label: uid, value: uid }))];
+});
+
+/** Read the content types straight after a successful connection — no extra click. */
+async function loadContentTypes() {
+  if (!strapiReady.value) return;
+  loadingTypes.value = true;
+  try {
+    const r = await $fetch<{ contentTypes: ContentTypeSummary[] }>("/api/strapi/content-types", {
+      method: "POST",
+      body: { baseUrl: config.value.strapi.baseUrl, token: config.value.strapi.token },
+    });
+    contentTypes.value = r.contentTypes;
+    if (r.contentTypes.length > 0) {
+      toast.add({
+        title: `${r.contentTypes.length} content-types disponibles`,
+        icon: "i-lucide-check",
+        color: "success",
+      });
+    }
+  } catch (err) {
+    contentTypes.value = [];
+    toast.add({
+      title: "Content-types non listés",
+      description: errorText(err),
+      icon: "i-lucide-info",
+      color: "warning",
+    });
+  } finally {
+    loadingTypes.value = false;
+  }
+}
 
 const step = ref(0);
 const stepper = useTemplateRef("stepper");
@@ -112,31 +165,45 @@ async function testWordPress() {
 async function testStrapi() {
   testingStrapi.value = true;
   strapiResult.value = null;
+  // Listing the content types does not depend on the configured UIDs being right — that is
+  // precisely what you cannot know before seeing the list.
+  const listing = loadContentTypes();
   try {
     const r = await $fetch<{
-      posts: { ok: true; total: number } | { ok: false; status: number; message: string };
-      pages: { ok: true; total: number } | { ok: false; status: number; message: string };
+      checks: Array<{
+        key: string;
+        label: string;
+        uid: string;
+        result: { ok: true; total: number } | { ok: false; status: number; message: string };
+      }>;
     }>("/api/test/strapi", { method: "POST", body: config.value.strapi });
 
-    if (r.posts.ok && r.pages.ok) {
-      strapiResult.value = {
-        ok: true,
-        message: `${r.posts.total} articles · ${r.pages.total} pages déjà en base`,
-      };
-    } else {
-      strapiResult.value = {
-        ok: false,
-        message: [
-          !r.posts.ok ? `articles (${r.posts.status}) : ${r.posts.message}` : "",
-          !r.pages.ok ? `pages (${r.pages.status}) : ${r.pages.message}` : "",
-        ]
-          .filter(Boolean)
-          .join(" · "),
-      };
-    }
+    const failed = r.checks.filter((c) => !c.result.ok);
+    strapiResult.value = failed.length === 0
+      ? {
+          ok: true,
+          message: r.checks
+            .map((c) => `${(c.result as { total: number }).total} ${c.label}`)
+            .join(" · ") + " déjà en base",
+        }
+      : {
+          ok: false,
+          message:
+            failed
+              .map((c) => {
+                const res = c.result as { status: number; message: string };
+                return `${c.label} (${c.uid}) — ${res.status} : ${res.message}`;
+              })
+              .join(" · ") +
+            (contentTypes.value.length > 0
+              ? " · Choisissez le bon content-type dans la liste ci-dessous."
+              : ""),
+        };
+
   } catch (err) {
-    strapiResult.value = { ok: false, message: (err as Error).message };
+    strapiResult.value = { ok: false, message: errorText(err) };
   } finally {
+    await listing;
     testingStrapi.value = false;
   }
 }
@@ -150,7 +217,7 @@ async function startMigration() {
   } catch (err) {
     toast.add({
       title: "Lancement impossible",
-      description: (err as { statusMessage?: string }).statusMessage ?? (err as Error).message,
+      description: errorText(err),
       icon: "i-lucide-triangle-alert",
       color: "error",
     });
@@ -308,18 +375,76 @@ async function startMigration() {
 
             <USeparator label="Content-types cibles" />
 
+            <div class="flex items-center justify-between gap-3">
+              <p class="text-sm text-muted">
+                <template v-if="contentTypes.length">
+                  {{ contentTypes.length }} content-types lus depuis Strapi.
+                </template>
+                <template v-else>
+                  Testez la connexion pour lister les content-types, ou saisissez les UID.
+                </template>
+              </p>
+              <UButton
+                color="neutral"
+                variant="ghost"
+                size="xs"
+                icon="i-lucide-refresh-cw"
+                :loading="loadingTypes"
+                :disabled="!strapiReady"
+                @click="loadContentTypes"
+              >
+                Lister
+              </UButton>
+            </div>
+
             <div class="grid sm:grid-cols-2 gap-4">
               <UFormField label="Articles">
-                <UInput v-model="config.strapi.postUid" placeholder="api::post.post" class="w-full" />
+                <USelectMenu
+                  v-model="config.strapi.postUid"
+                  :items="uidItems"
+                  value-key="value"
+                  create-item="always"
+                  :search-input="{ placeholder: 'Filtrer ou saisir un UID…' }"
+                  placeholder="api::post.post"
+                  class="w-full"
+                  @create="(v: string) => (config.strapi.postUid = v)"
+                />
               </UFormField>
               <UFormField label="Pages">
-                <UInput v-model="config.strapi.pageUid" placeholder="api::page.page" class="w-full" />
+                <USelectMenu
+                  v-model="config.strapi.pageUid"
+                  :items="uidItems"
+                  value-key="value"
+                  create-item="always"
+                  :search-input="{ placeholder: 'Filtrer ou saisir un UID…' }"
+                  placeholder="api::page.page"
+                  class="w-full"
+                  @create="(v: string) => (config.strapi.pageUid = v)"
+                />
               </UFormField>
               <UFormField label="Catégories" description="Vide = catégories non migrées.">
-                <UInput v-model="config.strapi.categoryUid" placeholder="api::category.category" class="w-full" />
+                <USelectMenu
+                  v-model="config.strapi.categoryUid"
+                  :items="uidItems"
+                  value-key="value"
+                  create-item="always"
+                  :search-input="{ placeholder: 'Filtrer ou saisir un UID…' }"
+                  placeholder="aucune"
+                  class="w-full"
+                  @create="(v: string) => (config.strapi.categoryUid = v)"
+                />
               </UFormField>
               <UFormField label="Étiquettes" description="Vide = étiquettes non migrées.">
-                <UInput v-model="config.strapi.tagUid" placeholder="api::tag.tag" class="w-full" />
+                <USelectMenu
+                  v-model="config.strapi.tagUid"
+                  :items="uidItems"
+                  value-key="value"
+                  create-item="always"
+                  :search-input="{ placeholder: 'Filtrer ou saisir un UID…' }"
+                  placeholder="aucune"
+                  class="w-full"
+                  @create="(v: string) => (config.strapi.tagUid = v)"
+                />
               </UFormField>
             </div>
 

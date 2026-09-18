@@ -31,12 +31,13 @@ export {
   defaultTermMapping,
   mergeMappings,
   readPath,
+  setPath,
   validateMapping,
   TRANSFORMS,
 } from "./mapping.js";
 export type { FieldMapping, MappingSet, MappingContext, MappingIssue } from "./mapping.js";
 export { flattenEntity, VIRTUAL_SOURCES } from "./introspect.js";
-export type { SourceField, TargetField, TargetSchema } from "./introspect.js";
+export type { ContentTypeSummary, SourceField, TargetField, TargetSchema } from "./introspect.js";
 export { StateStore } from "./state.js";
 export type { MediaFormat, MigrationState } from "./state.js";
 export type { WpMedia, WpPage, WpPost, WpTerm, StrapiEntry, StrapiUploadFile } from "./types.js";

@@ -2,6 +2,8 @@ import type {
   StrapiAdapter,
   StrapiEntry,
   StrapiUploadFile,
+  ContentTypeSummary,
+  TargetField,
   TargetSchema,
   WriteOptions,
 } from "@paullefizelier/wp-to-strapi-core";
@@ -22,12 +24,26 @@ export interface StrapiLike {
     service: (name: string) => unknown;
   };
   /** Present on the Strapi global; used to read a content-type's real schema. */
-  contentType?: (uid: string) => {
-    attributes?: Record<
-      string,
-      { type?: string; required?: boolean; target?: string; enum?: string[] }
-    >;
-  } | undefined;
+  contentType?: (uid: string) => StrapiSchema | undefined;
+  contentTypes?: Record<string, StrapiSchema | undefined>;
+  components?: Record<string, StrapiSchema | undefined>;
+}
+
+interface StrapiAttribute {
+  type?: string;
+  required?: boolean;
+  target?: string;
+  enum?: string[];
+  component?: string;
+  repeatable?: boolean;
+  components?: string[];
+}
+
+interface StrapiSchema {
+  uid?: string;
+  info?: { displayName?: string; pluralName?: string };
+  kind?: string;
+  attributes?: Record<string, StrapiAttribute>;
 }
 
 interface UploadService {
@@ -88,22 +104,56 @@ export class NativeStrapiAdapter implements StrapiAdapter {
     };
   }
 
-  /** In-process, the real schema is right there — no guessing from a sample entry. */
+  /** In-process, every schema is right there — no HTTP, no guessing from a sample entry. */
+  async listContentTypes(): Promise<ContentTypeSummary[]> {
+    return Object.entries(this.strapi.contentTypes ?? {})
+      .filter(([uid]) => uid.startsWith("api::"))
+      .map(([uid, schema]) => ({
+        uid,
+        displayName: schema?.info?.displayName ?? uid,
+        kind: (schema?.kind === "singleType" ? "singleType" : "collectionType") as
+          | "collectionType"
+          | "singleType",
+        pluralName: schema?.info?.pluralName,
+        visible: true,
+      }));
+  }
+
   async describeTarget(uid: string): Promise<TargetSchema> {
     const attributes = this.strapi.contentType?.(uid)?.attributes;
     if (!attributes) {
       return { uid, source: "none", fields: [], note: `Unknown content-type "${uid}"` };
     }
-    return {
-      uid,
-      source: "schema",
-      fields: Object.entries(attributes).map(([name, a]) => ({
+    const componentFields = (componentUid: string): TargetField[] =>
+      Object.entries(this.strapi.components?.[componentUid]?.attributes ?? {}).map(([name, a]) => ({
         name,
         type: a.type,
         required: a.required,
-        target: a.target,
         options: a.enum,
-      })),
+      }));
+
+    return {
+      uid,
+      source: "schema",
+      fields: Object.entries(attributes).map(([name, a]) => {
+        const field: TargetField = {
+          name,
+          type: a.type,
+          required: a.required,
+          target: a.target,
+          options: a.enum,
+        };
+        if (a.type === "component" && a.component) {
+          field.component = a.component;
+          field.repeatable = a.repeatable;
+          field.fields = componentFields(a.component);
+        }
+        if (a.type === "dynamiczone" && a.components) {
+          field.components = a.components;
+          field.fields = a.components.flatMap(componentFields);
+        }
+        return field;
+      }),
     };
   }
 

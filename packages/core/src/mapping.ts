@@ -8,7 +8,10 @@ import type { MigrationState } from "./state.js";
  * entry — the "common fields" case). Transforms run left to right on whatever comes out.
  */
 export interface FieldMapping {
-  /** Strapi attribute to write, e.g. `title`, `seo_title`, `locale`. */
+  /**
+   * Strapi attribute to write. Dot paths reach inside a component — `content.body` for a
+   * single component, `blocks.0.body` for a repeatable one or a dynamic zone.
+   */
   target: string;
   /** Dot path into the WP entity: `title.rendered`, `acf.subtitle`, `meta._yoast_wpseo_title`. */
   source?: string;
@@ -115,6 +118,19 @@ export const TRANSFORMS: Record<string, TransformFn> = {
     return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
   },
   default: (v, arg) => (isEmpty(v) ? arg : v),
+  /** Wrap in an array — what a repeatable component or a dynamic zone expects. */
+  wrap: (v) => (Array.isArray(v) ? v : [v]),
+  /** `object:body` → `{ body: value }`, the shape of a single component. */
+  object: (v, arg) => (arg ? { [arg]: v } : v),
+  /**
+   * `component:content.rich-text:body` → `{ __component: "content.rich-text", body: value }`.
+   * Add `wrap` after it for a dynamic zone, which is always a list.
+   */
+  component: (v, arg) => {
+    const [uid, field = "body"] = (arg ?? "").split(":");
+    if (!uid) return v;
+    return { __component: uid, [field]: v };
+  },
   /**
    * Translate values: `map:actualites=professionnels,blog=grand-public`, with `*` as the
    * fallback. This is what turns a WordPress slug into a Strapi enumeration value.
@@ -142,6 +158,30 @@ function isEmpty(value: unknown): boolean {
   if (typeof value === "string") return value.trim() === "";
   if (Array.isArray(value)) return value.length === 0;
   return false;
+}
+
+/**
+ * Write a dot path into the payload, creating what is missing on the way.
+ *
+ * A numeric segment creates an array, so `blocks.0.body` builds `{ blocks: [{ body }] }` —
+ * the shape Strapi wants for a repeatable component or a dynamic zone.
+ */
+export function setPath(target: Record<string, unknown>, path: string, value: unknown): void {
+  const keys = path.split(".").filter(Boolean);
+  const last = keys.pop();
+  if (!last) return;
+
+  let node: Record<string, unknown> | unknown[] = target;
+  for (const [i, key] of keys.entries()) {
+    const nextIsIndex = /^\d+$/.test(keys[i + 1] ?? last);
+    const container = node as Record<string, unknown>;
+    const existing = container[key];
+    if (existing === undefined || typeof existing !== "object" || existing === null) {
+      container[key] = nextIsIndex ? [] : {};
+    }
+    node = container[key] as Record<string, unknown> | unknown[];
+  }
+  (node as Record<string, unknown>)[last] = value;
 }
 
 /** Read a dot path out of the entity. `a.b.0.c` walks objects and arrays alike. */
@@ -239,7 +279,7 @@ export function applyMapping(
 
     if (value === undefined) continue;
     if (row.omitEmpty && isEmpty(value)) continue;
-    data[target] = value;
+    setPath(data, target, value);
   }
   return { data, warnings };
 }

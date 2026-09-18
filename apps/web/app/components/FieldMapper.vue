@@ -96,6 +96,19 @@ const rows = computed<FieldMapping[]>({
 });
 
 const issues = computed(() => validateMapping(rows.value));
+
+/**
+ * Targets the content-type does not have. Strapi rejects an unknown attribute outright, so
+ * catching it here beats discovering it on entry one of three thousand.
+ */
+const unknownTargets = computed(() => {
+  if (targetSchema.value?.source !== "schema") return [];
+  const known = new Set((targetSchema.value.fields ?? []).map((f) => f.name));
+  return rows.value
+    .map((r) => r.target)
+    .filter(Boolean)
+    .filter((t) => !known.has(t.split(".")[0] ?? t));
+});
 const transformNames = Object.keys(TRANSFORMS);
 
 const sourceFields = ref<SourceField[]>([]);
@@ -108,11 +121,66 @@ const sourcePaths = computed(() => {
   const used = rows.value.map((r) => r.source).filter((s): s is string => Boolean(s));
   return [...new Set([...discovered, ...used])];
 });
+/**
+ * Target paths, including inside components: a rich-text component is written as
+ * `contenu.body` (single) or `blocs.0.body` (repeatable), which is what Strapi expects.
+ */
 const targetNames = computed(() => {
-  const discovered = (targetSchema.value?.fields ?? []).map((f) => f.name);
+  const discovered = (targetSchema.value?.fields ?? []).flatMap((f) => {
+    if (!f.fields?.length) return [f.name];
+    const prefix = f.type === "dynamiczone" || f.repeatable ? `${f.name}.0` : f.name;
+    return [f.name, ...f.fields.map((sub) => `${prefix}.${sub.name}`)];
+  });
   const used = rows.value.map((r) => r.target).filter(Boolean);
   return [...new Set([...discovered, ...used])];
 });
+
+/** Component and dynamic-zone fields, which need a shape rather than a bare value. */
+const structuredFields = computed(() =>
+  (targetSchema.value?.fields ?? []).filter(
+    (f) => f.type === "component" || f.type === "dynamiczone",
+  ),
+);
+
+/** The field inside a component that should receive the WordPress body. */
+function bodyFieldOf(field: { fields?: Array<{ name: string; type?: string }> }) {
+  const subs = field.fields ?? [];
+  return (
+    subs.find((f) => f.type === "richtext" || f.type === "blocks")?.name ??
+    subs.find((f) => f.name === "body" || f.name === "content" || f.name === "texte")?.name ??
+    subs[0]?.name ??
+    "body"
+  );
+}
+
+/** One click to map the WordPress body into a component, in the shape Strapi expects. */
+function mapContentInto(field: (typeof structuredFields.value)[number]) {
+  const body = bodyFieldOf(field);
+  const row: FieldMapping =
+    field.type === "dynamiczone"
+      ? {
+          target: field.name,
+          source: "$content",
+          transforms: [
+            "rewriteMedia",
+            `component:${field.components?.[0] ?? "content.rich-text"}:${body}`,
+            "wrap",
+          ],
+        }
+      : {
+          target: field.repeatable ? `${field.name}.0.${body}` : `${field.name}.${body}`,
+          source: "$content",
+          transforms: ["rewriteMedia"],
+        };
+  rows.value = [...rows.value.filter((r) => r.target !== row.target), row];
+  const tab = tabs.value.find((t) => t.value === active.value)?.label ?? active.value;
+  toast.add({
+    title: `Contenu mappé vers ${row.target}`,
+    description: `Ajouté à l'onglet ${tab}.`,
+    icon: "i-lucide-check",
+    color: "success",
+  });
+}
 
 /** Enumeration fields, so a constant can be picked from the allowed values, not typed. */
 const enumOptions = computed<Record<string, string[]>>(() =>
@@ -296,6 +364,34 @@ function resetToDefault() {
         description="Appliqués à tous les imports. Un champ redéfini dans un onglet spécifique l'emporte ici."
       />
 
+      <div v-if="structuredFields.length > 0" class="rounded-md border border-default p-3 space-y-2">
+        <p class="text-sm font-medium text-highlighted">
+          Champs structurés détectés
+        </p>
+        <p class="text-xs text-muted">
+          Ces champs attendent un composant, pas une valeur simple. Le bouton écrit la bonne
+          forme — un chemin comme <code>contenu.body</code>, ou une zone dynamique.
+        </p>
+        <div
+          v-for="f in structuredFields"
+          :key="f.name"
+          class="flex flex-wrap items-center justify-between gap-2"
+        >
+          <div class="text-xs">
+            <span class="font-mono text-toned">{{ f.name }}</span>
+            <UBadge color="neutral" variant="subtle" size="sm" class="ml-2">
+              {{ f.type === "dynamiczone" ? "zone dynamique" : f.repeatable ? "composant répétable" : "composant" }}
+            </UBadge>
+            <span class="text-dimmed ml-2">
+              {{ f.component ?? (f.components ?? []).join(", ") }}
+            </span>
+          </div>
+          <UButton size="xs" color="neutral" variant="subtle" icon="i-lucide-wand-sparkles" @click="mapContentInto(f)">
+            Y mapper le contenu
+          </UButton>
+        </div>
+      </div>
+
       <UAlert
         v-if="targetSchema && targetSchema.source !== 'schema'"
         icon="i-lucide-triangle-alert"
@@ -414,6 +510,15 @@ function resetToDefault() {
           {{ sourceFields.length }} champs WP lus
         </UBadge>
       </div>
+
+      <UAlert
+        v-if="unknownTargets.length > 0"
+        color="warning"
+        variant="subtle"
+        icon="i-lucide-triangle-alert"
+        title="Champs absents du content-type"
+        :description="`${unknownTargets.join(', ')} — Strapi refusera ces attributs. Choisissez-les dans la liste ou retirez les lignes.`"
+      />
 
       <UAlert
         v-if="issues.length > 0"

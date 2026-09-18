@@ -17,6 +17,24 @@ export interface TargetField {
   target?: string;
   /** Allowed values of an enumeration field — what a select will accept. */
   options?: string[];
+  /** For a `component` attribute: the component UID and whether it repeats. */
+  component?: string;
+  repeatable?: boolean;
+  /** For a `dynamiczone` attribute: the component UIDs it accepts. */
+  components?: string[];
+  /** Fields of the component(s) above, so a mapping can target inside them. */
+  fields?: TargetField[];
+}
+
+/** A content type as offered in a picker, instead of typing `api::post.post` by hand. */
+export interface ContentTypeSummary {
+  uid: string;
+  displayName: string;
+  kind: "collectionType" | "singleType";
+  /** REST path segment — what the collection lives under in /api/. */
+  pluralName?: string;
+  /** False for Strapi's internal types, which are never migration targets. */
+  visible: boolean;
 }
 
 export interface TargetSchema {

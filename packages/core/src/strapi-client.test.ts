@@ -57,6 +57,18 @@ describe("StrapiClient publication", () => {
     expect(calls[0]?.method).toBe("PUT");
   });
 
+  it("looks entries up with v5 syntax — publicationState is rejected by v5", async () => {
+    await client.findOneBy("api::post.post", "wpId", 42);
+    expect(calls[0]?.url).toContain("filters[wpId][$eq]=42");
+    expect(calls[0]?.url).toContain("status=draft");
+    expect(calls[0]?.url).not.toContain("publicationState");
+  });
+
+  it("reads the content types from the Content-Type Builder content-API routes", async () => {
+    await client.listContentTypes().catch(() => []);
+    expect(calls[0]?.url).toBe("https://cms.test/api/content-type-builder/content-types");
+  });
+
   it("publishes an existing document without touching its fields", async () => {
     await client.publish("api::post.post", "doc-9");
     expect(calls[0]?.url).toBe("https://cms.test/api/posts/doc-9?status=published");

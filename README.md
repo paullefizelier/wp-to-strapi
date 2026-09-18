@@ -225,13 +225,31 @@ Failed ids are kept in the state file, so `--retry-failed` (a button in the UI, 
 in the API) fetches only those entries from WordPress — `?include=1,2` — instead of walking the
 whole site again. An entry that succeeds on the retry stops being reported.
 
+### Components and dynamic zones
+
+A Strapi content field is often not a plain attribute but a component — a `content.rich-text`
+with a `body` inside — or a dynamic zone. A mapping reaches those with a dot path, and two
+transforms give the shape Strapi expects:
+
+| Target shape | Mapping |
+|--------------|---------|
+| Single component | `{ "target": "contenu.body", "source": "$content", "transforms": ["rewriteMedia"] }` |
+| Repeatable component | `{ "target": "blocs.0.body", … }`, or `"transforms": ["object:body", "wrap"]` |
+| Dynamic zone | `{ "target": "blocs", "transforms": ["rewriteMedia", "component:content.rich-text:body", "wrap"] }` |
+
+The UI detects them: a **Champs structurés détectés** panel lists every component and dynamic
+zone on the target type, with a button that writes the right row for you. Targets the content
+type does not have are flagged before the run, since Strapi rejects unknown attributes.
+
 ### Picking fields from both sides
 
 Once the WordPress and Strapi connections are set, both UIs read the real field lists: the WP
 side by sampling an entry (with `context=edit` when credentials are set, which is what exposes
-`meta` and ACF), the Strapi side from the content-type schema. The plugin runs in-process and
-always gets the true schema; over HTTP, Strapi v5 only exposes schemas to the admin API, so the
-CLI/Nuxt path falls back to inferring the shape from an existing entry and says so.
+`meta` and ACF), the Strapi side from the Content-Type Builder's **content-API routes**
+(`/api/content-type-builder/content-types`), which a plain API token can reach — no admin
+session. That is also what fills the content-type picker, so UIDs are chosen from a list
+instead of typed. When those routes are unavailable the shape is inferred from an existing
+entry and the UI says so.
 
 ## What actually comes across
 

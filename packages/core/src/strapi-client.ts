@@ -1,5 +1,5 @@
 import { request, FormData, type Dispatcher } from "undici";
-import type { TargetField, TargetSchema } from "./introspect.js";
+import type { ContentTypeSummary, TargetField, TargetSchema } from "./introspect.js";
 import { HttpStatusError, parseRetryAfter, withRetry } from "./retry.js";
 import type { WriteOptions } from "./strapi-adapter.js";
 import type { StrapiEntry, StrapiUploadFile } from "./types.js";
@@ -28,7 +28,70 @@ function statusQuery(options?: WriteOptions): string {
   return options?.status ? `?status=${options.status}` : "";
 }
 
+interface CtbAttribute {
+  type?: string;
+  required?: boolean;
+  target?: string;
+  enum?: string[];
+  component?: string;
+  repeatable?: boolean;
+  components?: string[];
+}
+
+interface CtbContentType {
+  uid: string;
+  apiID?: string;
+  schema?: {
+    displayName?: string;
+    kind?: "collectionType" | "singleType";
+    pluralName?: string;
+    visible?: boolean;
+    attributes?: Record<string, CtbAttribute>;
+  };
+}
+
+interface CtbComponent {
+  uid: string;
+  schema?: { displayName?: string; attributes?: Record<string, CtbAttribute> };
+}
+
+/** Flatten one CTB attribute, pulling in the component's own fields when there are any. */
+function toTargetField(
+  name: string,
+  a: CtbAttribute,
+  components: Map<string, CtbComponent>,
+): TargetField {
+  const field: TargetField = {
+    name,
+    type: a.type,
+    required: a.required,
+    target: a.target,
+    options: a.enum,
+  };
+  if (a.type === "component" && a.component) {
+    field.component = a.component;
+    field.repeatable = a.repeatable;
+    field.fields = componentFields(a.component, components);
+  }
+  if (a.type === "dynamiczone" && a.components) {
+    field.components = a.components;
+    field.fields = a.components.flatMap((uid) => componentFields(uid, components));
+  }
+  return field;
+}
+
+function componentFields(uid: string, components: Map<string, CtbComponent>): TargetField[] {
+  const attributes = components.get(uid)?.schema?.attributes ?? {};
+  return Object.entries(attributes).map(([name, a]) => ({
+    name,
+    type: a.type,
+    required: a.required,
+    options: a.enum,
+  }));
+}
+
 export class StrapiClient {
+  private componentCache: Map<string, CtbComponent> | null = null;
   private readonly retry: { retries: number; onRetry?: StrapiClientOptions["onRetry"] };
 
   constructor(private readonly opts: StrapiClientOptions) {
@@ -138,41 +201,68 @@ export class StrapiClient {
   }
 
   /**
-   * Describe a target content-type.
+   * List the content types this Strapi exposes.
    *
-   * Strapi v5 only exposes schemas through the admin API, which an API token cannot reach, so
-   * this tries the Content-Type Builder first and otherwise infers the shape from an existing
-   * entry. Inference misses fields that entry left empty — hence the `source` flag, so the UI
-   * can say how much to trust the list.
+   * The Content-Type Builder publishes content-API routes under /api/content-type-builder,
+   * so a plain API token is enough — no admin session, and nothing to type by hand.
+   */
+  async listContentTypes(): Promise<ContentTypeSummary[]> {
+    const resp = await this.json<{ data?: CtbContentType[] }>(
+      "GET",
+      "/api/content-type-builder/content-types",
+    );
+    return (resp.data ?? [])
+      .filter((ct) => ct.uid?.startsWith("api::") || ct.schema?.visible)
+      .map((ct) => ({
+        uid: ct.uid,
+        displayName: ct.schema?.displayName ?? ct.apiID ?? ct.uid,
+        kind: ct.schema?.kind ?? "collectionType",
+        pluralName: ct.schema?.pluralName,
+        visible: ct.schema?.visible !== false,
+      }));
+  }
+
+  /** Component definitions, so a mapping can target the fields inside a component. */
+  private async components(): Promise<Map<string, CtbComponent>> {
+    if (this.componentCache) return this.componentCache;
+    try {
+      const resp = await this.json<{ data?: CtbComponent[] }>(
+        "GET",
+        "/api/content-type-builder/components",
+      );
+      this.componentCache = new Map((resp.data ?? []).map((c) => [c.uid, c]));
+    } catch {
+      this.componentCache = new Map();
+    }
+    return this.componentCache;
+  }
+
+  /**
+   * Describe a target content-type: its fields, and the fields inside any component or
+   * dynamic zone, so a rich-text component can be mapped as easily as a plain attribute.
+   *
+   * Falls back to inferring the shape from an existing entry when the Content-Type Builder is
+   * not reachable — hence the `source` flag, so the UI can say how much to trust the list.
    */
   async describeTarget(uid: string, pluralOverride?: string): Promise<TargetSchema> {
     try {
-      const schema = await this.json<{
-        data?: {
-          schema?: {
-            attributes?: Record<
-              string,
-              { type?: string; required?: boolean; target?: string; enum?: string[] }
-            >;
-          };
-        };
-      }>("GET", `/content-type-builder/content-types/${encodeURIComponent(uid)}`);
-      const attributes = schema.data?.schema?.attributes;
+      const resp = await this.json<{ data?: CtbContentType }>(
+        "GET",
+        `/api/content-type-builder/content-types/${encodeURIComponent(uid)}`,
+      );
+      const attributes = resp.data?.schema?.attributes;
       if (attributes && Object.keys(attributes).length > 0) {
+        const components = await this.components();
         return {
           uid,
           source: "schema",
-          fields: Object.entries(attributes).map(([name, a]) => ({
-            name,
-            type: a.type,
-            required: a.required,
-            target: a.target,
-            options: a.enum,
-          })),
+          fields: Object.entries(attributes).map(([name, a]) =>
+            toTargetField(name, a, components),
+          ),
         };
       }
     } catch {
-      // Expected with an API token: the Content-Type Builder is admin-only.
+      // Older Strapi, or a token without access to the Content-Type Builder routes.
     }
 
     try {
@@ -182,7 +272,10 @@ export class StrapiClient {
       if (entry) {
         const fields: TargetField[] = Object.entries(entry)
           .filter(([name]) => !["id", "documentId", "createdAt", "updatedAt"].includes(name))
-          .map(([name, value]) => ({ name, type: typeof value === "object" && value !== null ? "relation" : typeof value }));
+          .map(([name, value]) => ({
+            name,
+            type: typeof value === "object" && value !== null ? "relation" : typeof value,
+          }));
         return {
           uid,
           source: "sample",
@@ -208,9 +301,11 @@ export class StrapiClient {
     value: string | number,
     pluralOverride?: string,
   ): Promise<StrapiEntry | null> {
+    // `status=draft` is v5's way of reaching every document: a published one keeps a draft
+    // version alongside it, so this finds both. (v4's `publicationState=preview` is rejected.)
     const path = `${this.collectionUrl(uid, pluralOverride)}?filters[${field}][$eq]=${encodeURIComponent(
       String(value),
-    )}&pagination[pageSize]=1&publicationState=preview`;
+    )}&pagination[pageSize]=1&status=draft`;
     const resp = await this.json<{ data: StrapiEntry[] }>("GET", path);
     return resp.data[0] ?? null;
   }

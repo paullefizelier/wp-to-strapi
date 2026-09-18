@@ -231,3 +231,72 @@ describe("select/enumeration targets", () => {
     expect(data.audience).toBe("un-sous-titre");
   });
 });
+
+describe("component and dynamic-zone targets", () => {
+  it("writes into a single component with a dot path", () => {
+    const { data } = applyMapping(
+      entity,
+      [
+        { target: "contenu.body", source: "content.rendered", transforms: ["rewriteMedia"] },
+        { target: "wpId", source: "id" },
+      ],
+      ctx,
+    );
+    expect(data).toEqual({
+      contenu: { body: expect.stringContaining("https://cms.test/uploads/photo.jpg") },
+      wpId: 42,
+    });
+  });
+
+  it("builds a repeatable component from an indexed path", () => {
+    const { data } = applyMapping(
+      entity,
+      [
+        { target: "blocs.0.body", source: "content.rendered" },
+        { target: "blocs.0.titre", source: "title.rendered", transforms: ["decodeEntities"] },
+      ],
+      ctx,
+    );
+    expect(data.blocs).toEqual([
+      { body: entity.content.rendered, titre: "Cafés & co" },
+    ]);
+  });
+
+  it("builds a dynamic zone with the component transform", () => {
+    const { data } = applyMapping(
+      entity,
+      [
+        {
+          target: "contenu",
+          source: "content.rendered",
+          transforms: ["component:content.rich-text:body", "wrap"],
+        },
+      ],
+      ctx,
+    );
+    expect(data.contenu).toEqual([
+      { __component: "content.rich-text", body: entity.content.rendered },
+    ]);
+  });
+
+  it("shapes a repeatable component without a dynamic zone marker", () => {
+    const { data } = applyMapping(
+      entity,
+      [{ target: "paragraphes", source: "content.rendered", transforms: ["object:body", "wrap"] }],
+      ctx,
+    );
+    expect(data.paragraphes).toEqual([{ body: entity.content.rendered }]);
+  });
+
+  it("keeps sibling paths in the same component", () => {
+    const { data } = applyMapping(
+      entity,
+      [
+        { target: "seo.metaTitle", source: "title.rendered", transforms: ["decodeEntities"] },
+        { target: "seo.metaDescription", source: "acf.subtitle" },
+      ],
+      ctx,
+    );
+    expect(data.seo).toEqual({ metaTitle: "Cafés & co", metaDescription: "Un sous-titre" });
+  });
+});

@@ -9,6 +9,7 @@ export {
   defaultTermMapping,
   mergeMappings,
   readPath,
+  setPath,
   validateMapping,
   TRANSFORMS,
 } from "./mapping.js";
@@ -22,5 +23,5 @@ export type {
 export { decodeEntities, detectFlavour, findShortcodes, rewriteMediaUrls } from "./html-transform.js";
 export type { ContentFlavour } from "./html-transform.js";
 export { flattenEntity, VIRTUAL_SOURCES } from "./introspect.js";
-export type { SourceField, TargetField, TargetSchema } from "./introspect.js";
+export type { ContentTypeSummary, SourceField, TargetField, TargetSchema } from "./introspect.js";
 export type { MigrationState, MediaFormat } from "./state.js";
