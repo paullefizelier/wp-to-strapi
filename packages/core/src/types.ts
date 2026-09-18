@@ -31,6 +31,17 @@ export interface WpPage extends WpPost {
   menu_order: number;
 }
 
+/** A term from a WP taxonomy endpoint (/categories, /tags, or a custom taxonomy). */
+export interface WpTerm {
+  id: number;
+  name: string;
+  slug: string;
+  description?: string;
+  count?: number;
+  parent?: number;
+  taxonomy?: string;
+}
+
 export interface WpMedia {
   id: number;
   date: string;
@@ -47,6 +58,8 @@ export interface WpMedia {
     height?: number;
     file?: string;
     filesize?: number;
+    /** WP's generated variants (thumbnail, medium, large…), keyed by size name. */
+    sizes?: Record<string, { file?: string; width?: number; height?: number; source_url?: string }>;
   };
 }
 
@@ -58,6 +71,8 @@ export interface StrapiUploadFile {
   mime: string;
   width?: number;
   height?: number;
+  /** Responsive variants Strapi generated for images (thumbnail, small, medium, large). */
+  formats?: Record<string, { url?: string; width?: number } | undefined> | null;
 }
 
 export interface StrapiEntry {

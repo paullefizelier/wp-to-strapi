@@ -6,7 +6,10 @@ export default ({ strapi }: { strapi: Core.Strapi }) => {
   const migrationSvc = () =>
     strapi.plugin("wp-import").service("migration") as {
       testWordPress: () => Promise<unknown>;
-      start: (only: Kind[]) => Promise<Run>;
+      start: (only?: Kind[], retryFailed?: boolean) => Promise<Run>;
+      preview: (opts: { kind?: string; restBase?: string; limit?: number }) => Promise<unknown>;
+      wpFields: (restBase: string) => Promise<unknown>;
+      strapiFields: (uid: string) => Promise<unknown>;
     };
 
   const runStoreSvc = () =>
@@ -19,14 +22,36 @@ export default ({ strapi }: { strapi: Core.Strapi }) => {
       return migrationSvc().testWordPress();
     },
 
-    async start(ctx: { request: { body?: { only?: string[] } }; badRequest: (msg: string) => never; conflict?: (msg: string) => never }) {
+    async preview(ctx: { request: { body?: { kind?: string; restBase?: string; limit?: number } } }) {
+      return migrationSvc().preview(ctx.request.body ?? {});
+    },
+
+    async wpFields(ctx: { query?: { type?: string } }) {
+      return migrationSvc().wpFields(ctx.query?.type || "posts");
+    },
+
+    async strapiFields(ctx: { query?: { uid?: string }; badRequest: (msg: string) => never }) {
+      const uid = ctx.query?.uid;
+      if (!uid) ctx.badRequest("uid is required");
+      return migrationSvc().strapiFields(uid as string);
+    },
+
+    async start(ctx: {
+      request: { body?: { only?: string[]; retryFailed?: boolean } };
+      badRequest: (msg: string) => never;
+      conflict?: (msg: string) => never;
+    }) {
       const body = ctx.request.body ?? {};
-      const only = (body.only ?? ["media", "posts", "pages"]).filter(
-        (k): k is Kind => k === "media" || k === "posts" || k === "pages",
-      );
-      if (only.length === 0) ctx.badRequest("only must include at least one of media/posts/pages");
+      const kinds: Kind[] = ["media", "categories", "tags", "posts", "pages", "custom"];
+      const only = (body.only ?? []).filter((k): k is Kind => kinds.includes(k as Kind));
+      if (body.only && only.length === 0) {
+        ctx.badRequest(`only must include at least one of ${kinds.join("/")}`);
+      }
       try {
-        const run = await migrationSvc().start(only);
+        const run = await migrationSvc().start(
+          only.length > 0 ? only : undefined,
+          body.retryFailed === true,
+        );
         return { id: run.id, startedAt: run.startedAt };
       } catch (err) {
         throw Object.assign(new Error((err as Error).message), { status: 409 });

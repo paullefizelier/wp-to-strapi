@@ -1,21 +1,34 @@
 import { request } from "undici";
-import type { WpMedia, WpPage, WpPost } from "./types.js";
+import { flattenEntity, VIRTUAL_SOURCES, type SourceField } from "./introspect.js";
+import { HttpStatusError, parseRetryAfter, withRetry } from "./retry.js";
+import type { WpMedia, WpPage, WpPost, WpTerm } from "./types.js";
 
 export interface WordPressClientOptions {
   baseUrl: string;
   username?: string;
   appPassword?: string;
   pageSize?: number;
+  /** Extra attempts on rate limiting, 5xx and dropped sockets. */
+  retries?: number;
+  /** Called before each backoff wait, so a run can log what it is waiting on. */
+  onRetry?: (attempt: number, delayMs: number, reason: string) => void;
+}
+
+/** `include` narrows a listing to specific ids — how a retry fetches only what failed. */
+function includeQuery(include?: ReadonlyArray<number>): Record<string, string> {
+  return include && include.length > 0 ? { include: include.join(",") } : {};
 }
 
 export class WordPressClient {
   private readonly baseUrl: string;
   private readonly authHeader?: string;
   private readonly pageSize: number;
+  private readonly retry: { retries: number; onRetry?: WordPressClientOptions["onRetry"] };
 
   constructor(opts: WordPressClientOptions) {
-    this.baseUrl = `${opts.baseUrl.replace(/\/+$/, "")}/wp-json/wp/v2`;
+    this.baseUrl = `${opts.baseUrl.trim().replace(/\/+$/, "")}/wp-json/wp/v2`;
     this.pageSize = opts.pageSize ?? 100;
+    this.retry = { retries: opts.retries ?? 3, onRetry: opts.onRetry };
     if (opts.username && opts.appPassword) {
       const b64 = Buffer.from(`${opts.username}:${opts.appPassword}`).toString(
         "base64",
@@ -38,20 +51,30 @@ export class WordPressClient {
     };
     if (this.authHeader) headers.Authorization = this.authHeader;
 
-    const res = await request(url, { method: "GET", headers });
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      const text = await res.body.text();
-      throw new Error(
-        `WP GET ${url.pathname} failed ${res.statusCode}: ${text.slice(0, 300)}`,
-      );
-    }
-    const totalPages = Number(res.headers["x-wp-totalpages"] ?? "1");
-    const total = Number(res.headers["x-wp-total"] ?? "0");
-    const body = (await res.body.json()) as T;
-    return { body, totalPages, total };
+    return withRetry(async () => {
+      const res = await request(url, { method: "GET", headers });
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        const text = await res.body.text();
+        throw new HttpStatusError(
+          `WP GET ${url.pathname} failed ${res.statusCode}: ${text.slice(0, 300)}`,
+          res.statusCode,
+          parseRetryAfter(res.headers["retry-after"]),
+        );
+      }
+      const totalPages = Number(res.headers["x-wp-totalpages"] ?? "1");
+      const total = Number(res.headers["x-wp-total"] ?? "0");
+      const body = (await res.body.json()) as T;
+      return { body, totalPages, total };
+    }, this.retry);
   }
 
-  /** Async-iterate a paginated endpoint. */
+  /**
+   * Async-iterate a paginated endpoint.
+   *
+   * `status` is deliberately left to the caller: post types use `publish`, but attachments
+   * are stored with WP's internal `inherit` status and the media endpoint rejects `publish`
+   * outright (400 rest_forbidden_status).
+   */
   private async *paginate<T>(
     path: string,
     extraQuery: Record<string, string | number | undefined> = {},
@@ -62,14 +85,31 @@ export class WordPressClient {
         ...extraQuery,
         per_page: this.pageSize,
         page,
-        // Include drafts/future if authenticated; ignored otherwise.
-        status: extraQuery.status ?? "publish",
         orderby: "id",
         order: "asc",
       });
       for (const item of body) yield item;
       if (page >= totalPages || body.length === 0) break;
       page += 1;
+    }
+  }
+
+  /**
+   * How many items an endpoint holds, from WordPress's own X-WP-Total header. Cheap (one
+   * request) and it is what lets a run show "12 / 1651" instead of a count with no end.
+   */
+  async count(
+    restBase: string,
+    query: Record<string, string | number | undefined> = {},
+  ): Promise<number> {
+    try {
+      const { total } = await this.get<unknown[]>(`/${restBase.replace(/^\/+/, "")}`, {
+        ...query,
+        per_page: 1,
+      });
+      return total;
+    } catch {
+      return 0; // an unknown total is better than a failed run
     }
   }
 
@@ -83,34 +123,121 @@ export class WordPressClient {
     return { posts: posts.total, pages: pages.total, media: media.total };
   }
 
-  posts(): AsyncGenerator<WpPost> {
-    return this.paginate<WpPost>("/posts", { _embed: "1" });
+  posts(
+    statuses: ReadonlyArray<string> = ["publish"],
+    include?: ReadonlyArray<number>,
+  ): AsyncGenerator<WpPost> {
+    return this.paginate<WpPost>("/posts", {
+      status: statuses.join(","),
+      ...includeQuery(include),
+    });
   }
 
-  pages(): AsyncGenerator<WpPage> {
-    return this.paginate<WpPage>("/pages", { _embed: "1" });
+  pages(
+    statuses: ReadonlyArray<string> = ["publish"],
+    include?: ReadonlyArray<number>,
+  ): AsyncGenerator<WpPage> {
+    return this.paginate<WpPage>("/pages", {
+      status: statuses.join(","),
+      ...includeQuery(include),
+    });
+  }
+
+  /** Any custom post type exposed under its REST base, e.g. `portfolio`. */
+  customType(
+    restBase: string,
+    statuses: ReadonlyArray<string> = ["publish"],
+    include?: ReadonlyArray<number>,
+  ): AsyncGenerator<WpPost> {
+    return this.paginate<WpPost>(`/${restBase.replace(/^\/+/, "")}`, {
+      status: statuses.join(","),
+      ...includeQuery(include),
+    });
+  }
+
+  /** Terms of a taxonomy (`categories`, `tags`, or a custom taxonomy's REST base). */
+  terms(restBase: string): AsyncGenerator<WpTerm> {
+    return this.paginate<WpTerm>(`/${restBase.replace(/^\/+/, "")}`);
   }
 
   media(): AsyncGenerator<WpMedia> {
-    return this.paginate<WpMedia>("/media");
+    return this.paginate<WpMedia>("/media", { status: "inherit" });
+  }
+
+  /**
+   * List the fields available on a WP content type, from a real entry. Uses the `edit` context
+   * when credentials are set, which is what exposes `meta` — plugins like ACF surface their
+   * fields here too.
+   */
+  async describeSource(restBase = "posts"): Promise<SourceField[]> {
+    const path = `/${restBase.replace(/^\/+/, "")}`;
+    const query: Record<string, string | number> = { per_page: 1 };
+    if (this.authHeader) query.context = "edit";
+    let body: unknown[];
+    try {
+      ({ body } = await this.get<unknown[]>(path, query));
+    } catch (err) {
+      // `context=edit` is refused when the account lacks the capability — retry as a reader.
+      if (!this.authHeader) throw err;
+      ({ body } = await this.get<unknown[]>(path, { per_page: 1 }));
+    }
+    const sample = body[0];
+    if (!sample) return [...VIRTUAL_SOURCES];
+    return [...flattenEntity(sample), ...VIRTUAL_SOURCES];
+  }
+
+  /** True when the client can authenticate — non-public statuses require it. */
+  get authenticated(): boolean {
+    return this.authHeader !== undefined;
+  }
+
+  /**
+   * Fetch a public page as HTML. Used to recover content the REST API cannot render —
+   * page builders keep their layout in post meta and only emit it on the front end.
+   */
+  async fetchPage(url: string): Promise<string> {
+    return withRetry(async () => {
+      const res = await request(url, {
+        method: "GET",
+        maxRedirections: 3,
+        headers: {
+          Accept: "text/html",
+          "User-Agent": "wp-to-strapi/0.1",
+          ...(this.authHeader ? { Authorization: this.authHeader } : {}),
+        },
+      });
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw new HttpStatusError(
+          `WP GET ${url} failed: ${res.statusCode}`,
+          res.statusCode,
+          parseRetryAfter(res.headers["retry-after"]),
+        );
+      }
+      return res.body.text();
+    }, this.retry);
   }
 
   async fetchBinary(
     url: string,
   ): Promise<{ buffer: Buffer; contentType: string }> {
-    const res = await request(url, {
-      method: "GET",
-      headers: this.authHeader
-        ? { Authorization: this.authHeader, "User-Agent": "wp-to-strapi/0.1" }
-        : { "User-Agent": "wp-to-strapi/0.1" },
-    });
-    if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw new Error(`Download ${url} failed: ${res.statusCode}`);
-    }
-    const arr = await res.body.arrayBuffer();
-    const contentType =
-      (res.headers["content-type"] as string | undefined) ??
-      "application/octet-stream";
-    return { buffer: Buffer.from(arr), contentType };
+    return withRetry(async () => {
+      const res = await request(url, {
+        method: "GET",
+        headers: this.authHeader
+          ? { Authorization: this.authHeader, "User-Agent": "wp-to-strapi/0.1" }
+          : { "User-Agent": "wp-to-strapi/0.1" },
+      });
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw new HttpStatusError(
+          `Download ${url} failed: ${res.statusCode}`,
+          res.statusCode,
+          parseRetryAfter(res.headers["retry-after"]),
+        );
+      }
+      const arr = await res.body.arrayBuffer();
+      const contentType =
+        (res.headers["content-type"] as string | undefined) ?? "application/octet-stream";
+      return { buffer: Buffer.from(arr), contentType };
+    }, this.retry);
   }
 }

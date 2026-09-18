@@ -1,4 +1,4 @@
-import type { MigrationConfigInput } from "../shared/schema";
+import type { MigrationConfigInput } from "#shared/schema";
 
 const STORAGE_KEY = "wp-to-strapi:config";
 
@@ -14,7 +14,12 @@ const empty = (): MigrationConfigInput => ({
   pageSize: 100,
   stateFile: "./.migration-state.json",
   dryRun: false,
+  htmlFallback: true,
+  statuses: ["publish"],
+  customTypes: [],
+  mapping: {},
   only: ["media", "posts", "pages"],
+  retryFailed: false,
 });
 
 /**

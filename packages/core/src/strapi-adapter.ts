@@ -1,3 +1,12 @@
+import type { TargetSchema } from "./introspect.js";
+
+/**
+ * Strapi v5 decides publication by `status`, never by a `publishedAt` in the payload: the
+ * Document Service strips that attribute and defaults every write to a draft.
+ */
+export interface WriteOptions {
+  status?: "draft" | "published";
+}
 import type { StrapiEntry, StrapiUploadFile } from "./types.js";
 
 /**
@@ -28,6 +37,7 @@ export interface StrapiAdapter {
     uid: string,
     data: T,
     pluralOverride?: string,
+    options?: WriteOptions,
   ): Promise<StrapiEntry>;
 
   update<T extends object>(
@@ -35,5 +45,13 @@ export interface StrapiAdapter {
     documentId: string,
     data: T,
     pluralOverride?: string,
+    options?: WriteOptions,
   ): Promise<StrapiEntry>;
+
+  /**
+   * List the fields of a target content-type, to drive the mapping UI. Optional: an adapter
+   * that cannot introspect its destination simply omits it, and callers fall back to typing
+   * field names.
+   */
+  describeTarget?(uid: string, pluralOverride?: string): Promise<TargetSchema>;
 }
