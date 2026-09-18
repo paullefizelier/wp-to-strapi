@@ -106,12 +106,12 @@ export function buildConfig(input: {
 }): AppConfig {
   return {
     wp: {
-      baseUrl: input.wp.baseUrl.replace(/\/+$/, ""),
+      baseUrl: input.wp.baseUrl.trim().replace(/\/+$/, ""),
       username: input.wp.username,
       appPassword: input.wp.appPassword,
     },
     strapi: {
-      baseUrl: input.strapi.baseUrl.replace(/\/+$/, ""),
+      baseUrl: input.strapi.baseUrl.trim().replace(/\/+$/, ""),
       token: input.strapi.token,
       postUid: input.strapi.postUid ?? defaults.postUid,
       pageUid: input.strapi.pageUid ?? defaults.pageUid,

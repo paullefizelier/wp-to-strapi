@@ -26,7 +26,7 @@ export class WordPressClient {
   private readonly retry: { retries: number; onRetry?: WordPressClientOptions["onRetry"] };
 
   constructor(opts: WordPressClientOptions) {
-    this.baseUrl = `${opts.baseUrl.replace(/\/+$/, "")}/wp-json/wp/v2`;
+    this.baseUrl = `${opts.baseUrl.trim().replace(/\/+$/, "")}/wp-json/wp/v2`;
     this.pageSize = opts.pageSize ?? 100;
     this.retry = { retries: opts.retries ?? 3, onRetry: opts.onRetry };
     if (opts.username && opts.appPassword) {

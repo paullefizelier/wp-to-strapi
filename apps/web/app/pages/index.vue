@@ -97,6 +97,11 @@ const strapiUrlError = computed(() => {
   return /^https?:\/\/.+/.test(v) ? undefined : "URL invalide — commencez par http:// ou https://";
 });
 
+/** Trim what was pasted: a trailing slash makes Strapi answer 400 "Malicious Path". */
+function tidyUrl(value: string) {
+  return value.trim().replace(/\/+$/, "");
+}
+
 const wpReady = computed(() => Boolean(config.value.wp.baseUrl) && !wpUrlError.value);
 const strapiReady = computed(
   () => Boolean(config.value.strapi.baseUrl && config.value.strapi.token) && !strapiUrlError.value,
@@ -360,6 +365,7 @@ async function startMigration() {
                   placeholder="http://localhost:1337"
                   icon="i-lucide-server"
                   class="w-full"
+                  @blur="config.strapi.baseUrl = tidyUrl(config.strapi.baseUrl)"
                 />
               </UFormField>
               <UFormField label="API Token" description="Full access — Settings → API Tokens." required>

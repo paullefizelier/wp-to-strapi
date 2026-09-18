@@ -6,11 +6,12 @@ vi.mock("undici", async () => {
   const actual = await vi.importActual<typeof import("undici")>("undici");
   return {
     ...actual,
-    request: vi.fn(async (url: string | URL, opts: { method: string; body?: string }) => {
+    request: vi.fn(async (url: string | URL, opts: { method: string; body?: unknown }) => {
       calls.push({
         url: String(url),
         method: opts.method,
-        body: opts.body ? JSON.parse(opts.body) : undefined,
+        // Uploads send FormData, not JSON.
+        body: typeof opts.body === "string" ? JSON.parse(opts.body) : undefined,
       });
       return {
         statusCode: 200,
@@ -25,6 +26,43 @@ vi.mock("undici", async () => {
 });
 
 const { StrapiClient } = await import("./strapi-client.js");
+
+describe("StrapiClient base URL", () => {
+  beforeEach(() => {
+    calls.length = 0;
+  });
+
+  it("does not double the slash when the base URL ends with one", async () => {
+    // `https://cms.test//api/posts` never matches an API route: Strapi falls through to the
+    // static-file middleware, which rejects the absolute path with 400 "Malicious Path".
+    const client = new StrapiClient({ baseUrl: "https://cms.test/", token: "t" });
+    await client.probe("api::post.post");
+    expect(calls[0]?.url).not.toContain("//api/");
+    expect(calls[0]?.url).toContain("https://cms.test/api/posts");
+  });
+
+  it("keeps a stray slash or space in a UID out of the path", async () => {
+    const client = new StrapiClient({ baseUrl: "https://cms.test", token: "t" });
+    await client.probe(" api::post.post ");
+    expect(calls[0]?.url).toContain("https://cms.test/api/posts?");
+    await client.probe("api::post.post", "/articles/");
+    expect(calls[1]?.url).toContain("https://cms.test/api/articles?");
+  });
+
+  it("normalises the media upload URL too", async () => {
+    const client = new StrapiClient({ baseUrl: "https://cms.test/", token: "t" });
+    await client
+      .uploadFile({ buffer: Buffer.from("x"), fileName: "a.jpg", contentType: "image/jpeg" })
+      .catch(() => undefined); // the stub answers with an entry shape, not an upload array
+    expect(calls[0]?.url).toBe("https://cms.test/api/upload");
+  });
+
+  it("tolerates several trailing slashes and surrounding spaces", async () => {
+    const client = new StrapiClient({ baseUrl: "  https://cms.test///  ", token: "t" });
+    await client.create("api::post.post", { title: "x" });
+    expect(calls[0]?.url).toBe("https://cms.test/api/posts");
+  });
+});
 
 describe("StrapiClient publication", () => {
   const client = new StrapiClient({ baseUrl: "https://cms.test", token: "t" });

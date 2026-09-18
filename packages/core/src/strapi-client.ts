@@ -92,9 +92,14 @@ function componentFields(uid: string, components: Map<string, CtbComponent>): Ta
 
 export class StrapiClient {
   private componentCache: Map<string, CtbComponent> | null = null;
+  private readonly baseUrl: string;
   private readonly retry: { retries: number; onRetry?: StrapiClientOptions["onRetry"] };
 
   constructor(private readonly opts: StrapiClientOptions) {
+    // A pasted URL keeps its trailing slash, and `https://host//api/posts` never matches an
+    // API route: Strapi falls through to the static-file middleware, which answers
+    // 400 "Malicious Path". Normalise here rather than trusting every caller.
+    this.baseUrl = opts.baseUrl.trim().replace(/\/+$/, "");
     this.retry = { retries: opts.retries ?? 3, onRetry: opts.onRetry };
   }
 
@@ -104,7 +109,7 @@ export class StrapiClient {
     body?: unknown,
   ): Promise<T> {
     return withRetry(async () => {
-      const res = await request(`${this.opts.baseUrl}${path}`, {
+      const res = await request(`${this.baseUrl}${path}`, {
         method,
         headers: {
           Authorization: `Bearer ${this.opts.token}`,
@@ -127,8 +132,8 @@ export class StrapiClient {
 
   /** Derive the plural REST path from an API UID like `api::post.post`. */
   private pluralPath(uid: string): string {
-    const parts = uid.split(".");
-    const last = parts[parts.length - 1] ?? uid;
+    const parts = uid.trim().split(".");
+    const last = (parts[parts.length - 1] ?? uid).trim();
     // Basic English pluralization fallback. Override via STRAPI_*_PLURAL env if needed.
     if (last.endsWith("y")) return `${last.slice(0, -1)}ies`;
     if (last.endsWith("s")) return last;
@@ -136,13 +141,16 @@ export class StrapiClient {
   }
 
   collectionUrl(uid: string, pluralOverride?: string): string {
-    return `/api/${pluralOverride || this.pluralPath(uid)}`;
+    // Any stray slash here produces a path Strapi does not route, and the static-file
+    // middleware answers 400 "Malicious Path" rather than a helpful 404.
+    const segment = (pluralOverride || this.pluralPath(uid)).trim().replace(/^\/+|\/+$/g, "");
+    return `/api/${segment}`;
   }
 
   /** Call a collection endpoint with page size 1 to validate token + UID. */
   async probe(uid: string, pluralOverride?: string): Promise<{ ok: true; total: number } | { ok: false; status: number; message: string }> {
     const path = `${this.collectionUrl(uid, pluralOverride)}?pagination[pageSize]=1&pagination[withCount]=true`;
-    const res = await request(`${this.opts.baseUrl}${path}`, {
+    const res = await request(`${this.baseUrl}${path}`, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${this.opts.token}`,
@@ -181,7 +189,7 @@ export class StrapiClient {
     }
 
     const arr = await withRetry(async () => {
-      const res = await request(`${this.opts.baseUrl}/api/upload`, {
+      const res = await request(`${this.baseUrl}/api/upload`, {
         method: "POST",
         headers: { Authorization: `Bearer ${this.opts.token}` },
         body: form,
