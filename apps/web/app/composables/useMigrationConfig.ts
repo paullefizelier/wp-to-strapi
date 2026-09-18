@@ -1,4 +1,4 @@
-import type { MigrationConfigInput } from "../shared/schema";
+import type { MigrationConfigInput } from "#shared/schema";
 
 const STORAGE_KEY = "wp-to-strapi:config";
 

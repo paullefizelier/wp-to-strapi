@@ -44,7 +44,7 @@ wp-to-strapi/
 │   └── strapi-adapter/   @wp-to-strapi/strapi-adapter  native adapter (strapi.documents() + upload svc)
 └── apps/
     ├── cli/              @wp-to-strapi/cli             CLI front-end
-    ├── web/              @wp-to-strapi/web             Nuxt 3 UI
+    ├── web/              @wp-to-strapi/web             Nuxt 4 UI
     └── strapi-plugin/    strapi-plugin-wp-import       Strapi v5 plugin
 ```
 

@@ -3,6 +3,7 @@ export default defineNuxtConfig({
   compatibilityDate: "2025-01-01",
   devtools: { enabled: true },
   modules: ["@nuxt/ui"],
+  css: ["~/assets/css/main.css"],
   runtimeConfig: {
     // Server-only secrets (not exposed to the client). Overridable via env vars NUXT_*.
     // The UI can still send these explicitly if you prefer not to persist them server-side.
