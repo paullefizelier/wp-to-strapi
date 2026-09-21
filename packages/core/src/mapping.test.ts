@@ -139,9 +139,15 @@ describe("applyMapping", () => {
   });
 
   it("warns instead of throwing when a transform is unknown", () => {
-    const { data, warnings } = applyMapping(entity, [{ target: "x", source: "slug", transforms: ["nope"] }], ctx);
+    const { data, notices } = applyMapping(
+      entity,
+      [{ target: "x", source: "slug", transforms: ["nope"] }],
+      ctx,
+    );
     expect(data.x).toBe("bonjour");
-    expect(warnings[0]).toContain('unknown transform "nope"');
+    expect(notices[0]?.code).toBe("mapping.unknownTransform");
+    expect(notices[0]?.params).toEqual({ transform: "nope", field: "x" });
+    expect(notices[0]?.message).toContain('unknown transform "nope"');
   });
 });
 

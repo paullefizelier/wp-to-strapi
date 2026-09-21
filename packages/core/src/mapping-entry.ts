@@ -22,6 +22,14 @@ export type {
 } from "./mapping.js";
 export { decodeEntities, detectFlavour, findShortcodes, rewriteMediaUrls } from "./html-transform.js";
 export type { ContentFlavour } from "./html-transform.js";
+export { describeNotice, notice, NOTICE_CODES } from "./notices.js";
+export type {
+  Notice,
+  NoticeCode,
+  NoticeLevel,
+  NoticeParams,
+  NoticeParamsByCode,
+} from "./notices.js";
 export { flattenEntity, VIRTUAL_SOURCES } from "./introspect.js";
 export type { ContentTypeSummary, SourceField, TargetField, TargetSchema } from "./introspect.js";
 export type { MigrationState, MediaFormat } from "./state.js";

@@ -185,7 +185,7 @@ async function main(): Promise<void> {
     for (const item of items) {
       console.log(`\n── ${item.kind} #${item.wpId} (${item.slug}) → ${item.uid}`);
       console.log(JSON.stringify(item.data, null, 2));
-      for (const w of item.warnings) console.warn(`  ⚠ ${w}`);
+      for (const n of item.notices) console.warn(`  ⚠ ${n.message}`);
     }
     if (items.length === 0) console.log("Nothing to preview.");
     return;

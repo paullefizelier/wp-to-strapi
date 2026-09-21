@@ -1,4 +1,5 @@
 import { decodeEntities, rewriteMediaUrls } from "./html-transform.js";
+import { notice, type Notice } from "./notices.js";
 import type { MigrationState } from "./state.js";
 
 /**
@@ -243,7 +244,7 @@ export function mergeMappings(
 
 export interface MappingResult {
   data: Record<string, unknown>;
-  warnings: string[];
+  notices: Notice[];
 }
 
 /** Turn a WordPress entity into the Strapi payload described by `rows`. */
@@ -253,7 +254,7 @@ export function applyMapping(
   ctx: MappingContext,
 ): MappingResult {
   const data: Record<string, unknown> = {};
-  const warnings: string[] = [];
+  const notices: Notice[] = [];
   const virtuals = ctx.virtuals ?? {};
 
   for (const row of rows) {
@@ -271,7 +272,7 @@ export function applyMapping(
       const [name = "", ...rest] = transform.split(":");
       const fn = TRANSFORMS[name];
       if (!fn) {
-        warnings.push(`unknown transform "${transform}" on field "${target}" — skipped`);
+        notices.push(notice("mapping.unknownTransform", { transform, field: target }));
         continue;
       }
       value = fn(value, rest.length > 0 ? rest.join(":") : undefined, ctx);
@@ -281,7 +282,7 @@ export function applyMapping(
     if (row.omitEmpty && isEmpty(value)) continue;
     setPath(data, target, value);
   }
-  return { data, warnings };
+  return { data, notices };
 }
 
 /**

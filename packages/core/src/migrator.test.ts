@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildConfig } from "./config.js";
+import { describeNotice, NOTICE_CODES } from "./notices.js";
 import { Migrator, type MigratorEvent } from "./migrator.js";
 import type { StrapiAdapter } from "./strapi-adapter.js";
 import type { MigrationState } from "./state.js";
@@ -439,5 +440,42 @@ describe("Migrator", () => {
     const migrator = new Migrator(config(), { strapi: strapi.adapter, wp: wp.wp });
     await migrator.run({ only: ["media", "posts"] });
     expect(strapi.created.map((c) => c.uid)).toEqual(["api::post.post", "api::post.post"]);
+  });
+});
+
+describe("Notices", () => {
+  it("carries a code and its parameters, not just a sentence", async () => {
+    const strapi = fakeStrapi();
+    const wp = fakeWp();
+    const events: MigratorEvent[] = [];
+    const migrator = new Migrator(
+      buildConfig({
+        wp: { baseUrl: "https://blog.example.com" },
+        strapi: { baseUrl: "https://cms.example.com", token: "t" },
+        stateFile: "/tmp/notices-state.json",
+        statuses: ["publish", "draft"],
+      }),
+      { strapi: strapi.adapter, wp: { ...wp.raw, authenticated: false } as never },
+    );
+    migrator.on("event", (e) => events.push(e));
+    await migrator.run({ only: ["pages"] });
+
+    const logs = events.filter((e) => e.type === "log");
+    const credentials = logs.find((e) => e.code === "statuses.needCredentials");
+    expect(credentials?.params).toEqual({ statuses: "draft" });
+    expect(credentials?.message).toContain("need WordPress credentials");
+
+    // The Elementor page in the fixture reports which builder it came from.
+    const builder = logs.find((e) => e.code === "content.recovered");
+    expect(builder?.params).toMatchObject({ reason: "elementor layout" });
+  });
+
+  it("gives every code an English rendering", () => {
+    for (const code of NOTICE_CODES) {
+      // Params are code-specific; an empty object is enough to prove the entry exists.
+      const text = describeNotice(code, {} as never);
+      expect(typeof text).toBe("string");
+      expect(text.length).toBeGreaterThan(0);
+    }
   });
 });

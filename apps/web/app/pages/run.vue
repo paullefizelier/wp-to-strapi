@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { MigratorEvent, Kind } from "@paullefizelier/wp-to-strapi-core";
 import type { TabsItem } from "@nuxt/ui";
+import { noticeText } from "~/utils/notices";
 
 definePageMeta({ title: "Migration en cours" });
 
@@ -421,7 +422,8 @@ onUnmounted(() => {
             </template>
             <template v-else-if="e.type === 'log'">
               <span :class="e.level === 'error' ? 'text-error' : e.level === 'warn' ? 'text-warning' : 'text-dimmed'">
-                {{ e.level === "info" ? "ℹ" : "⚠" }} {{ e.message }}
+                {{ e.level === "info" ? "ℹ" : "⚠" }}
+                {{ noticeText(e.code, e.params, e.message) }}
               </span>
             </template>
             <template v-else-if="e.type === 'run-start'">

@@ -18,6 +18,7 @@ import {
   validateMapping,
   type FieldMapping,
 } from "./mapping.js";
+import { notice, type Notice, type NoticeCode, type NoticeParamsByCode } from "./notices.js";
 import { StateStore, type MediaFormat } from "./state.js";
 import type { StrapiAdapter, WriteOptions } from "./strapi-adapter.js";
 import { StrapiClient } from "./strapi-client.js";
@@ -46,7 +47,14 @@ export type MigratorEvent =
   | { type: "item-skip"; kind: Kind; wpId: number; reason: string }
   | { type: "item-ok"; kind: Kind; wpId: number; detail: string }
   | { type: "item-error"; kind: Kind; wpId: number; message: string }
-  | { type: "log"; level: "info" | "warn" | "error"; message: string }
+  | {
+      type: "log";
+      level: "info" | "warn" | "error";
+      /** English rendering — front-ends that localise use `code` and `params` instead. */
+      message: string;
+      code?: NoticeCode;
+      params?: NoticeParamsByCode[NoticeCode];
+    }
   | {
       type: "run-end";
       at: string;
@@ -76,7 +84,7 @@ export interface PreviewItem {
   /** Strapi content-type the payload would go to. */
   uid: string;
   data: Record<string, unknown>;
-  warnings: string[];
+  notices: Notice[];
 }
 
 export interface PreviewOptions {
@@ -135,13 +143,20 @@ export class Migrator extends EventEmitter {
     this.emit("event", e);
   }
 
-  /** Surface waiting as progress, so a throttled run does not look frozen. */
-  private reportRetry(side: string, attempt: number, delayMs: number, reason: string): void {
+  /** Emit a notice as a log event, keeping the code and its parameters alongside the text. */
+  private say(n: Notice): void {
     this.fire({
       type: "log",
-      level: "warn",
-      message: `${side}: ${reason} — retry ${attempt} in ${delayMs}ms`,
+      level: n.level,
+      message: n.message,
+      code: n.code,
+      params: n.params,
     });
+  }
+
+  /** Surface waiting as progress, so a throttled run does not look frozen. */
+  private reportRetry(side: string, attempt: number, delayMs: number, reason: string): void {
+    this.say(notice("http.retry", { side, reason, attempt, delayMs }));
   }
 
   /**
@@ -218,14 +233,11 @@ export class Migrator extends EventEmitter {
     this.retryFailed = opts.retryFailed === true;
     if (this.retryFailed) {
       const pending = this.state.allFailures().length;
-      this.fire({
-        type: "log",
-        level: "info",
-        message:
-          pending > 0
-            ? `Retrying ${pending} entr${pending === 1 ? "y" : "ies"} that failed previously.`
-            : "Nothing to retry — the state file records no failures.",
-      });
+      this.say(
+        pending > 0
+          ? notice("retry.pending", { count: pending }, "info")
+          : notice("retry.nothing", {}, "info"),
+      );
       if (pending === 0) {
         this.fire({
           type: "run-end",
@@ -242,26 +254,14 @@ export class Migrator extends EventEmitter {
 
     const extraStatuses = this.cfg.statuses.filter((st) => st !== "publish");
     if (extraStatuses.length > 0 && !this.wp.authenticated) {
-      this.fire({
-        type: "log",
-        level: "warn",
-        message:
-          `Statuses ${extraStatuses.join(", ")} need WordPress credentials — ` +
-          `without them the REST API only returns published content.`,
-      });
+      this.say(notice("statuses.needCredentials", { statuses: extraStatuses.join(", ") }));
     }
 
     // Media and taxonomies first: posts reference both.
     if (kinds.includes("media")) await this.migrateMedia();
     this.mediaMigrated = Object.keys(this.state.get().media).length > 0;
     if (!this.mediaMigrated && (kinds.includes("posts") || kinds.includes("pages"))) {
-      this.fire({
-        type: "log",
-        level: "warn",
-        message:
-          "No media in the state file: every media URL in the imported content will keep " +
-          "pointing at WordPress. Run the media step first (or with this one).",
-      });
+      this.say(notice("media.none", {}));
     }
     if (kinds.includes("categories")) {
       await this.migrateTerms("categories", this.cfg.strapi.categoryUid, this.cfg.strapi.categoryPluralPath);
@@ -332,25 +332,23 @@ export class Migrator extends EventEmitter {
       groups.set(cause, group);
     }
 
-    this.fire({
-      type: "log",
-      level: "error",
-      message: `${failures.length} entr${failures.length === 1 ? "y" : "ies"} failed, grouped by cause:`,
-    });
+    this.say(notice("failures.header", { count: failures.length }, "error"));
     for (const [cause, g] of [...groups.entries()].sort((a, b) => b[1].count - a[1].count)) {
-      this.fire({
-        type: "log",
-        level: "error",
-        message:
-          `  ${g.count}× [${[...g.kinds].join(", ")}] ${cause} ` +
-          `(ids ${g.ids.join(", ")}${g.count > g.ids.length ? ", …" : ""})`,
-      });
+      this.say(
+        notice(
+          "failures.group",
+          {
+            count: g.count,
+            kinds: [...g.kinds].join(", "),
+            cause,
+            ids: g.ids.join(", "),
+            more: g.count > g.ids.length,
+          },
+          "error",
+        ),
+      );
     }
-    this.fire({
-      type: "log",
-      level: "info",
-      message: "Re-run with retryFailed (CLI: --retry-failed) to retry just these.",
-    });
+    this.say(notice("failures.hint", {}, "info"));
   }
 
   // ----- Taxonomies -----
@@ -384,7 +382,7 @@ export class Migrator extends EventEmitter {
         state: this.state.get(),
         strapiBaseUrl: this.cfg.strapi.baseUrl,
       });
-      for (const message of mapped.warnings) this.fire({ type: "log", level: "warn", message });
+      for (const n of mapped.notices) this.say(n);
       const data = mapped.data;
       if (this.cfg.dryRun) {
         this.fire({ type: "item-ok", kind, wpId: term.id, detail: `[dry-run] ${term.slug}` });
@@ -432,11 +430,13 @@ export class Migrator extends EventEmitter {
           tasks.push(this.limit(() => this.migrateOneCustom(entry, type)));
         }
       } catch (err) {
-        this.fire({
-          type: "log",
-          level: "error",
-          message: `custom type "${type.restBase}": ${(err as Error).message}`,
-        });
+        this.say(
+          notice(
+            "customType.failed",
+            { restBase: type.restBase, error: (err as Error).message },
+            "error",
+          ),
+        );
       }
       await Promise.all(tasks);
     }
@@ -490,7 +490,7 @@ export class Migrator extends EventEmitter {
           wpId: term.id,
           slug: term.slug,
           data: mapped.data,
-          warnings: mapped.warnings,
+          notices: mapped.notices,
         });
         if (items.length >= limit) break;
       }
@@ -524,17 +524,13 @@ export class Migrator extends EventEmitter {
         wpId: entry.id,
         slug: entry.slug,
         data: built.data,
-        warnings: built.warnings,
+        notices: built.notices,
       });
       if (items.length >= limit) break;
     }
 
     if (Object.keys(this.state.get().media).length === 0) {
-      for (const item of items) {
-        item.warnings.push(
-          "No media migrated yet — media URLs and cover fields stay unresolved in this preview.",
-        );
-      }
+      for (const item of items) item.notices.push(notice("media.none", {}));
     }
     return items;
   }
@@ -650,13 +646,13 @@ export class Migrator extends EventEmitter {
    */
   private async resolveContent(p: WpPost | WpPage): Promise<{
     html: string;
-    warnings: string[];
+    notices: Notice[];
   }> {
     const rendered = p.content?.rendered ?? "";
     const flavour = detectFlavour(rendered);
     const needsFallback =
       flavour === "empty" || flavour === "elementor" || flavour === "divi" || flavour === "wpbakery";
-    if (!this.cfg.htmlFallback || !needsFallback || !p.link) return { html: rendered, warnings: [] };
+    if (!this.cfg.htmlFallback || !needsFallback || !p.link) return { html: rendered, notices: [] };
 
     const label = `${p.type ?? "entry"} "${p.slug}" (wpId ${p.id})`;
     try {
@@ -664,24 +660,32 @@ export class Migrator extends EventEmitter {
       const extracted = extractReadableContent(page, p.link);
       const renderedText = rendered.replace(/<[^>]*>/g, "").trim().length;
       if (extracted.textLength <= renderedText || extracted.textLength === 0) {
-        return { html: rendered, warnings: [] };
+        return { html: rendered, notices: [] };
       }
-      const warnings = [
-        `${label}: ${flavour === "empty" ? "empty REST body" : `${flavour} layout`} — ` +
-          `recovered ${extracted.textLength} chars of text and images from ${p.link}. ` +
-          `Layout and styling are not migrated.`,
+      const notices: Notice[] = [
+        notice("content.recovered", {
+          entry: label,
+          reason: flavour === "empty" ? "empty REST body" : `${flavour} layout`,
+          chars: extracted.textLength,
+          url: p.link,
+        }),
       ];
       if (extracted.droppedEmbeds > 0) {
-        warnings.push(
-          `${label}: ${extracted.droppedEmbeds} embed(s) (iframe/video/audio) dropped from the ` +
-            `recovered content — re-add them by hand if they matter.`,
+        notices.push(
+          notice("content.embedsDropped", { entry: label, count: extracted.droppedEmbeds }),
         );
       }
-      return { html: extracted.html, warnings };
+      return { html: extracted.html, notices };
     } catch (err) {
       return {
         html: rendered,
-        warnings: [`${label}: could not fetch ${p.link} for fallback: ${(err as Error).message}`],
+        notices: [
+          notice("content.fallbackFailed", {
+            entry: label,
+            url: p.link,
+            error: (err as Error).message,
+          }),
+        ],
       };
     }
   }
@@ -690,7 +694,7 @@ export class Migrator extends EventEmitter {
     p: WpPost | WpPage,
     kind: "post" | "page",
     restBase?: string,
-  ): Promise<{ data: Record<string, unknown>; warnings: string[] }> {
+  ): Promise<{ data: Record<string, unknown>; notices: Notice[] }> {
     const resolved = await this.resolveContent(p);
     const state = this.state.get();
     const mapped = applyMapping(p, this.mappingFor(kind, restBase), {
@@ -708,7 +712,11 @@ export class Migrator extends EventEmitter {
     const rewritten = rewriteMediaUrls(resolved.html, state, this.cfg.strapi.baseUrl);
     return {
       data: mapped.data,
-      warnings: [...resolved.warnings, ...mapped.warnings, ...this.auditContent(p, resolved.html, rewritten)],
+      notices: [
+        ...resolved.notices,
+        ...mapped.notices,
+        ...this.auditContent(p, resolved.html, rewritten),
+      ],
     };
   }
 
@@ -717,29 +725,25 @@ export class Migrator extends EventEmitter {
    * unexpanded shortcodes, and media still pointing at WordPress. Silent blanks are the
    * failure mode that bites weeks later, once the WP install is gone.
    */
-  private auditContent(
-    p: WpPost | WpPage,
-    rendered: string,
-    rewritten: string,
-  ): string[] {
+  private auditContent(p: WpPost | WpPage, rendered: string, rewritten: string): Notice[] {
     const label = `${p.type ?? "entry"} "${p.slug}" (wpId ${p.id})`;
-    const warnings: string[] = [];
+    const notices: Notice[] = [];
 
     const flavour = detectFlavour(rendered);
     if (flavour === "empty") {
-      warnings.push(`${label}: WordPress returned empty rendered content — nothing to import`);
+      notices.push(notice("content.empty", { entry: label }));
     } else if (flavour === "elementor" || flavour === "divi" || flavour === "wpbakery") {
-      warnings.push(
-        `${label}: built with ${flavour} — the layout lives in post meta, so only the flattened ` +
-          `REST output is migrated. Expect to rebuild this page.`,
-      );
+      notices.push(notice("content.builder", { entry: label, builder: flavour }));
     }
 
     const shortcodes = findShortcodes(rendered);
     if (shortcodes.length > 0) {
-      warnings.push(
-        `${label}: ${shortcodes.length} unexpanded shortcode(s) kept as literal text: ` +
-          shortcodes.slice(0, 5).map((t) => `[${t}]`).join(" "),
+      notices.push(
+        notice("content.shortcodes", {
+          entry: label,
+          count: shortcodes.length,
+          tags: shortcodes.slice(0, 5).map((t) => `[${t}]`).join(" "),
+        }),
       );
     }
 
@@ -751,10 +755,7 @@ export class Migrator extends EventEmitter {
       ...(this.cfg.strapi.tagUid ? (p.tags ?? []).filter((id) => !state.tags[id]) : []),
     ];
     if (missingTerms.length > 0) {
-      warnings.push(
-        `${label}: ${missingTerms.length} term(s) not in the state file — run the categories ` +
-          `and tags steps before posts, or the relations stay empty.`,
-      );
+      notices.push(notice("terms.missing", { entry: label, count: missingTerms.length }));
     }
 
     // With no media map at all, every entry would repeat the same warning; the run says it
@@ -763,12 +764,15 @@ export class Migrator extends EventEmitter {
       ? findUnresolvedMediaUrls(rewritten, this.cfg.wp.baseUrl)
       : [];
     if (unresolved.length > 0) {
-      warnings.push(
-        `${label}: ${unresolved.length} media URL(s) still point at WordPress ` +
-          `(missing from the media map): ${unresolved.slice(0, 3).join(", ")}`,
+      notices.push(
+        notice("content.unresolvedMedia", {
+          entry: label,
+          count: unresolved.length,
+          examples: unresolved.slice(0, 3).join(", "),
+        }),
       );
     }
-    return warnings;
+    return notices;
   }
 
   private async upsertEntry(
@@ -778,8 +782,8 @@ export class Migrator extends EventEmitter {
     kind: "post" | "page" = "post",
     restBase?: string,
   ): Promise<{ documentId: string }> {
-    const { data, warnings } = await this.buildEntryData(p, kind, restBase);
-    for (const message of warnings) this.fire({ type: "log", level: "warn", message });
+    const { data, notices } = await this.buildEntryData(p, kind, restBase);
+    for (const n of notices) this.say(n);
     if (this.cfg.dryRun) {
       return { documentId: "dry-run" };
     }

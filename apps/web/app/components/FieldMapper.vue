@@ -10,6 +10,7 @@ import {
 } from "@paullefizelier/wp-to-strapi-core/mapping";
 import type { TabsItem } from "@nuxt/ui";
 import { useMigrationConfig } from "~/composables/useMigrationConfig";
+import { noticeText } from "~/utils/notices";
 
 const { config } = useMigrationConfig();
 const toast = useToast();
@@ -22,7 +23,7 @@ interface PreviewItem {
   slug: string;
   uid: string;
   data: Record<string, unknown>;
-  warnings: string[];
+  notices: Array<{ code?: string; params?: unknown; message: string; level: string }>;
 }
 
 const active = ref<MappingKey>("common");
@@ -547,7 +548,9 @@ function resetToDefault() {
               <span class="truncate">{{ item.slug }} → {{ item.uid }}</span>
             </div>
             <pre class="text-xs bg-elevated rounded-md p-3 overflow-x-auto">{{ JSON.stringify(item.data, null, 2) }}</pre>
-            <p v-for="(w, wi) in item.warnings" :key="wi" class="text-xs text-warning">⚠ {{ w }}</p>
+            <p v-for="(n, wi) in item.notices" :key="wi" class="text-xs text-warning">
+              ⚠ {{ noticeText(n.code, n.params, n.message) }}
+            </p>
           </div>
           <p v-if="preview.length === 0" class="text-sm text-muted">
             Rien à prévisualiser pour ce type de contenu.

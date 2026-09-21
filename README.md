@@ -211,6 +211,21 @@ npm run cli -- preview --kind posts --limit 2
 
 Both UIs have the same thing behind an **Aperçu / Preview** button next to the mapping editor.
 
+### Notices
+
+The engine serves three front-ends in two languages, so it does not emit sentences: every
+notice is a `code` plus its parameters, with an English rendering attached as `message`.
+
+```ts
+{ type: "log", level: "warn", code: "content.builder",
+  params: { entry: 'page "services" (wpId 42)', builder: "elementor" },
+  message: 'page "services" (wpId 42): built with elementor — …' }
+```
+
+The CLI and the Strapi plugin print `message`. The Nuxt UI keys off `code` against a French
+table typed as `Record<NoticeCode, …>`, so adding a code to the engine fails that app's
+typecheck until it has French text — an untranslated message cannot ship quietly.
+
 ### When something fails
 
 The run ends with the failures grouped by cause rather than three hundred identical lines
