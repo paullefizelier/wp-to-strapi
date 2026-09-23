@@ -18,7 +18,15 @@ function errorText(err: unknown): string {
 const testingWp = ref(false);
 const testingStrapi = ref(false);
 const starting = ref(false);
-const wpResult = ref<{ ok: boolean; message: string } | null>(null);
+const wpResult = ref<{ ok: boolean; message: string; resolvedBaseUrl?: string } | null>(null);
+
+/** Store the address WordPress actually answers from, so later requests skip the redirect. */
+function useResolvedWpUrl() {
+  if (!wpResult.value?.resolvedBaseUrl) return;
+  config.value.wp.baseUrl = wpResult.value.resolvedBaseUrl;
+  wpResult.value = { ...wpResult.value, resolvedBaseUrl: undefined };
+  toast.add({ title: "URL WordPress mise à jour", icon: "i-lucide-check", color: "success" });
+}
 const strapiResult = ref<{ ok: boolean; message: string } | null>(null);
 const contentTypes = ref<ContentTypeSummary[]>([]);
 const loadingTypes = ref(false);
@@ -150,6 +158,7 @@ async function testWordPress() {
       ok: boolean;
       counts?: { posts: number; pages: number; media: number };
       error?: string;
+      resolvedBaseUrl?: string;
     }>("/api/test/wp", {
       method: "POST",
       body: {
@@ -162,6 +171,7 @@ async function testWordPress() {
       ? {
           ok: true,
           message: `${r.counts?.posts ?? 0} articles · ${r.counts?.pages ?? 0} pages · ${r.counts?.media ?? 0} médias`,
+          resolvedBaseUrl: r.resolvedBaseUrl,
         }
       : { ok: false, message: r.error ?? "Échec inconnu" };
   } catch (err) {
@@ -327,6 +337,15 @@ async function startMigration() {
               :icon="wpResult.ok ? 'i-lucide-circle-check' : 'i-lucide-triangle-alert'"
               :title="wpResult.ok ? 'Connexion WordPress OK' : 'Connexion WordPress impossible'"
               :description="wpResult.message"
+            />
+            <UAlert
+              v-if="wpResult?.resolvedBaseUrl"
+              color="info"
+              variant="subtle"
+              icon="i-lucide-corner-down-right"
+              title="WordPress répond depuis une autre adresse"
+              :description="`Votre site redirige vers ${wpResult.resolvedBaseUrl}. La connexion a suivi, mais autant enregistrer la bonne adresse.`"
+              :actions="[{ label: 'Utiliser cette URL', color: 'info', variant: 'solid', onClick: useResolvedWpUrl }]"
             />
           </div>
         </UCard>

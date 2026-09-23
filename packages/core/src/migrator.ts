@@ -445,6 +445,11 @@ export class Migrator extends EventEmitter {
     }
 
     await this.state.persist();
+    if (this.wp.redirected) {
+      this.say(
+        notice("wp.redirected", { from: this.cfg.wp.baseUrl, to: this.wp.resolvedBaseUrl }, "info"),
+      );
+    }
     const failures = this.state.allFailures();
     this.reportFailures(failures);
     this.fire({

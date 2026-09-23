@@ -33,6 +33,7 @@ export const NOTICE_CODES = [
   "redirects.writeFailed",
   "routing.unknownTerm",
   "routing.summary",
+  "wp.redirected",
 ] as const;
 
 export type NoticeCode = (typeof NOTICE_CODES)[number];
@@ -62,6 +63,7 @@ export interface NoticeParamsByCode {
   "redirects.writeFailed": { file: string; error: string };
   "routing.unknownTerm": { route: string; taxonomy: string; term: string; available: string };
   "routing.summary": { counts: string };
+  "wp.redirected": { from: string; to: string };
 }
 
 export type NoticeParams<C extends NoticeCode = NoticeCode> = NoticeParamsByCode[C];
@@ -120,6 +122,9 @@ const EN: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
     `route "${p.route}": ${p.taxonomy === "tags" ? "tag" : "category"} "${p.term}" does not exist ` +
     `in WordPress (known: ${p.available})`,
   "routing.summary": (p) => `Routing: ${p.counts}`,
+  "wp.redirected": (p) =>
+    `WordPress answers from ${p.to}, not ${p.from} — following it. Set the WordPress URL to ` +
+    `${p.to} to skip the redirect.`,
   "failures.hint": () => "Re-run with retryFailed (CLI: --retry-failed) to retry just these.",
 };
 

@@ -28,14 +28,45 @@ function includeQuery(include?: ReadonlyArray<number>): Record<string, string> {
   return include && include.length > 0 ? { include: include.join(",") } : {};
 }
 
+/**
+ * Whether a redirect is the same site under its canonical address — worth adopting, with the
+ * credentials — or somewhere else, where they must not follow.
+ *
+ * Accepted: the same host with or without `www.`, and an upgrade from http to https. Refused:
+ * another host (a moved site, or a hijack — either way not ours to send a password to) and a
+ * downgrade to http, which would put the credentials on the wire in clear.
+ */
+export function isCanonicalRedirect(from: URL, to: URL): boolean {
+  const bare = (host: string) => host.toLowerCase().replace(/^www\./, "");
+  if (bare(from.host) !== bare(to.host)) return false;
+  if (from.protocol === "https:" && to.protocol === "http:") return false;
+  return true;
+}
+
+/** The site root a REST URL belongs to: everything before `/wp-json/`. */
+function siteRootOf(url: URL): string | null {
+  const index = url.pathname.indexOf("/wp-json/");
+  if (index < 0) return null;
+  return `${url.origin}${url.pathname.slice(0, index)}`;
+}
+
 export class WordPressClient {
-  private readonly baseUrl: string;
+  private baseUrl: string;
+  private readonly configuredRoot: string;
+  /**
+   * Every site root the client has been sent to, in order, starting with the configured one.
+   * Real sites often chain two hops (http://www → https://www → https://), so this is a path,
+   * not a single move — and its order is what tells a chain from a loop.
+   */
+  private readonly visited: string[];
   private readonly authHeader?: string;
   private readonly pageSize: number;
   private readonly retry: { retries: number; onRetry?: WordPressClientOptions["onRetry"] };
 
   constructor(opts: WordPressClientOptions) {
-    this.baseUrl = `${opts.baseUrl.trim().replace(/\/+$/, "")}/wp-json/wp/v2`;
+    this.configuredRoot = opts.baseUrl.trim().replace(/\/+$/, "");
+    this.baseUrl = `${this.configuredRoot}/wp-json/wp/v2`;
+    this.visited = [this.configuredRoot];
     this.pageSize = opts.pageSize ?? 100;
     this.retry = { retries: opts.retries ?? 3, onRetry: opts.onRetry };
     if (opts.username && opts.appPassword) {
@@ -62,6 +93,11 @@ export class WordPressClient {
 
     return withRetry(async () => {
       const res = await request(url, { method: "GET", headers });
+      if (res.statusCode >= 300 && res.statusCode < 400) {
+        await res.body.dump();
+        if (this.adoptRedirect(url, res.headers.location)) return this.get<T>(path, query);
+        throw new HttpStatusError(this.describeRedirect(url, res.statusCode, res.headers.location), res.statusCode);
+      }
       if (res.statusCode < 200 || res.statusCode >= 300) {
         const text = await res.body.text();
         throw new HttpStatusError(
@@ -75,6 +111,98 @@ export class WordPressClient {
       const body = (await res.body.json()) as T;
       return { body, totalPages, total };
     }, this.retry);
+  }
+
+  /**
+   * Move to the site's canonical address when WordPress redirects there.
+   *
+   * Following the redirect per request would lose the credentials: undici drops Authorization
+   * whenever the origin changes, so an http→https or www hop turns an authenticated call into
+   * an anonymous one — and drafts and meta quietly disappear. Adopting the new root once means
+   * every later request goes straight to the right address, credentials intact.
+   */
+  private adoptRedirect(from: URL, location: string | string[] | undefined): boolean {
+    const raw = Array.isArray(location) ? location[0] : location;
+    if (!raw) return false;
+    let to: URL;
+    try {
+      to = new URL(raw, from);
+    } catch {
+      return false;
+    }
+    const root = siteRootOf(to);
+    if (!root) return false;
+    // Judged against the address the user gave, not just the previous hop, so a chain cannot
+    // drift to another site one plausible step at a time.
+    let configured: URL;
+    try {
+      configured = new URL(this.configuredRoot);
+    } catch {
+      return false;
+    }
+    if (!isCanonicalRedirect(configured, to) || !isCanonicalRedirect(from, to)) return false;
+
+    const fromRoot = siteRootOf(from);
+    const fromIndex = fromRoot ? this.visited.indexOf(fromRoot) : -1;
+    const toIndex = this.visited.indexOf(root);
+    // Pointing back to where we came from is a loop. Pointing forward is either a new hop in
+    // the chain or a request that was in flight before we moved — both are fine.
+    if (toIndex !== -1 && toIndex <= fromIndex) return false;
+    if (toIndex === -1) {
+      if (this.visited.length >= 5) return false; // a chain this long is misconfiguration
+      this.visited.push(root);
+    }
+    this.baseUrl = `${this.visited[this.visited.length - 1]}/wp-json/wp/v2`;
+    return true;
+  }
+
+  private describeRedirect(
+    from: URL,
+    status: number,
+    location: string | string[] | undefined,
+  ): string {
+    const raw = Array.isArray(location) ? location[0] : location;
+    if (!raw) return `WP GET ${from.pathname} answered ${status} with no Location header`;
+    let to: URL;
+    try {
+      to = new URL(raw, from);
+    } catch {
+      return `WP GET ${from.pathname} redirected (${status}) to an invalid address: ${raw}`;
+    }
+    if (from.protocol === "https:" && to.protocol === "http:") {
+      return (
+        `WordPress redirects from https to http (${to.origin}). Credentials would travel in ` +
+        `clear, so the redirect was not followed.`
+      );
+    }
+    if (siteRootOf(to) && isCanonicalRedirect(from, to)) {
+      return (
+        `WordPress keeps redirecting between ${from.origin} and ${to.origin} — a redirect loop, ` +
+        `usually a mismatch between the site URL in WordPress settings and the server config.`
+      );
+    }
+    if (!siteRootOf(to)) {
+      return (
+        `WordPress redirects the REST API to ${to.href}, outside /wp-json/. The REST API may be ` +
+        `disabled, or blocked by a security plugin.`
+      );
+    }
+    return (
+      `WordPress redirects to another site (${to.origin}). Credentials are not sent there ` +
+      `automatically — if that is the right address, use it as the WordPress URL.`
+    );
+  }
+
+  /**
+   * The site root actually in use. Differs from the configured one when WordPress redirected
+   * to its canonical address — worth showing, so the stored URL can be corrected.
+   */
+  get resolvedBaseUrl(): string {
+    return this.visited[this.visited.length - 1] ?? this.configuredRoot;
+  }
+
+  get redirected(): boolean {
+    return this.visited.length > 1;
   }
 
   /**
@@ -249,8 +377,11 @@ export class WordPressClient {
     url: string,
   ): Promise<{ buffer: Buffer; contentType: string }> {
     return withRetry(async () => {
+      // Uploads are often served from a CDN behind a redirect. Following it is fine here:
+      // undici drops Authorization on a cross-origin hop, and a file needs none.
       const res = await request(url, {
         method: "GET",
+        maxRedirections: 5,
         headers: this.authHeader
           ? { Authorization: this.authHeader, "User-Agent": "wp-to-strapi/0.1" }
           : { "User-Agent": "wp-to-strapi/0.1" },

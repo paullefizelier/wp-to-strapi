@@ -55,6 +55,9 @@ const FR: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
     `Route « ${p.route} » : ${p.taxonomy === "tags" ? "l'étiquette" : "la catégorie"} ` +
     `« ${p.term} » n'existe pas dans WordPress (connues : ${p.available}).`,
   "routing.summary": (p) => `Routage : ${p.counts}.`,
+  "wp.redirected": (p) =>
+    `WordPress répond depuis ${p.to} et non ${p.from} — redirection suivie. Mettez ${p.to} ` +
+    `comme URL WordPress pour l'éviter.`,
   "failures.hint": () =>
     "Relancez avec « Relancer uniquement ces entrées » pour ne reprendre que celles-là.",
 };
