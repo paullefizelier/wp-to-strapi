@@ -45,6 +45,12 @@ const FR: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
   "failures.header": (p) => `${p.count} entrée(s) en échec, regroupées par cause :`,
   "failures.group": (p) =>
     `  ${p.count}× [${p.kinds}] ${p.cause} (ids ${p.ids}${p.more ? ", …" : ""})`,
+  "hierarchy.linked": (p) =>
+    `${p.kind === "pages" ? "Pages" : "Catégories"} : ${p.count} lien(s) de parenté rétabli(s).`,
+  "redirects.written": (p) =>
+    `${p.count} redirection(s) enregistrée(s)${p.file ? ` et écrite(s) dans ${p.file}` : ""}.`,
+  "redirects.writeFailed": (p) =>
+    `Impossible d'écrire la table de redirections dans ${p.file} : ${p.error}`,
   "failures.hint": () =>
     "Relancez avec « Relancer uniquement ces entrées » pour ne reprendre que celles-là.",
 };

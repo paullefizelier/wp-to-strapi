@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import pLimit from "p-limit";
 import type { AppConfig, CustomTypeConfig } from "./config.js";
@@ -12,7 +13,10 @@ import {
 } from "./html-transform.js";
 import {
   applyMapping,
+  defaultAuthorMapping,
+  defaultCommentMapping,
   defaultEntryMapping,
+  defaultMenuMapping,
   defaultTermMapping,
   mergeMappings,
   validateMapping,
@@ -22,8 +26,28 @@ import { notice, type Notice, type NoticeCode, type NoticeParamsByCode } from ".
 import { StateStore, type MediaFormat } from "./state.js";
 import type { StrapiAdapter, WriteOptions } from "./strapi-adapter.js";
 import { StrapiClient } from "./strapi-client.js";
-import type { StrapiUploadFile, WpMedia, WpPage, WpPost, WpTerm } from "./types.js";
+import type {
+  StrapiUploadFile,
+  WpComment,
+  WpMedia,
+  WpMenu,
+  WpMenuItem,
+  WpPage,
+  WpPost,
+  WpTerm,
+  WpUser,
+} from "./types.js";
 import { WordPressClient } from "./wordpress-client.js";
+
+/** The path part of a WordPress permalink — what a redirect rule matches on. */
+function pathOf(link: string | undefined): string {
+  if (!link) return "";
+  try {
+    return new URL(link).pathname;
+  } catch {
+    return link.startsWith("/") ? link : "";
+  }
+}
 
 /** Keep the responsive variants Strapi generated so `srcset` can be rebuilt on the way out. */
 function toMediaFormats(file: StrapiUploadFile): MediaFormat[] {
@@ -32,7 +56,17 @@ function toMediaFormats(file: StrapiUploadFile): MediaFormat[] {
     .sort((a, b) => a.width - b.width);
 }
 
-export type Kind = "media" | "categories" | "tags" | "posts" | "pages" | "custom";
+export type Kind =
+  | "media"
+  | "categories"
+  | "tags"
+  | "taxonomies"
+  | "authors"
+  | "posts"
+  | "pages"
+  | "custom"
+  | "comments"
+  | "menus";
 
 export interface MigrateOptions {
   only?: ReadonlyArray<Kind>;
@@ -222,8 +256,12 @@ export class Migrator extends EventEmitter {
     const kinds: Kind[] = ["media"];
     if (this.cfg.strapi.categoryUid) kinds.push("categories");
     if (this.cfg.strapi.tagUid) kinds.push("tags");
+    if (this.cfg.taxonomies.length > 0) kinds.push("taxonomies");
+    if (this.cfg.strapi.authorUid) kinds.push("authors");
     kinds.push("posts", "pages");
     if (this.cfg.customTypes.length > 0) kinds.push("custom");
+    if (this.cfg.strapi.commentUid) kinds.push("comments");
+    if (this.cfg.strapi.menuUid) kinds.push("menus");
     return kinds;
   }
 
@@ -269,9 +307,23 @@ export class Migrator extends EventEmitter {
     if (kinds.includes("tags")) {
       await this.migrateTerms("tags", this.cfg.strapi.tagUid, this.cfg.strapi.tagPluralPath);
     }
+    if (kinds.includes("taxonomies")) {
+      for (const taxonomy of this.cfg.taxonomies) {
+        await this.migrateTerms(taxonomy.restBase, taxonomy.uid, taxonomy.pluralPath, "taxonomies");
+      }
+    }
+    if (kinds.includes("authors")) await this.migrateAuthors();
     if (kinds.includes("posts")) await this.migratePosts();
     if (kinds.includes("pages")) await this.migratePages();
     if (kinds.includes("custom")) await this.migrateCustomTypes();
+    // Hierarchies need every document to exist first.
+    if (kinds.includes("pages") && this.cfg.strapi.parentField) await this.linkPageHierarchy();
+    if (kinds.includes("categories") && this.cfg.strapi.termParentField) {
+      await this.linkTermHierarchy();
+    }
+    if (kinds.includes("comments")) await this.migrateComments();
+    if (kinds.includes("menus")) await this.migrateMenus();
+    await this.writeRedirects();
 
     await this.state.persist();
     const failures = this.state.allFailures();
@@ -354,31 +406,35 @@ export class Migrator extends EventEmitter {
   // ----- Taxonomies -----
 
   private async migrateTerms(
-    kind: "categories" | "tags",
+    taxonomy: string,
     uid: string | undefined,
     pluralOverride: string | undefined,
+    reportAs: Kind = taxonomy === "tags" ? "tags" : "categories",
   ): Promise<void> {
     if (!uid) return;
-    this.fire({ type: "section-start", kind, expected: await this.wp.count(kind) });
+    this.fire({ type: "section-start", kind: reportAs, expected: await this.wp.count(taxonomy) });
     const tasks: Promise<void>[] = [];
     let count = 0;
-    for await (const term of this.wp.terms(kind)) {
+    for await (const term of this.wp.terms(taxonomy)) {
       count += 1;
-      tasks.push(this.limit(() => this.migrateOneTerm(kind, term, uid, pluralOverride)));
+      tasks.push(
+        this.limit(() => this.migrateOneTerm(taxonomy, term, uid, pluralOverride, reportAs)),
+      );
     }
     await Promise.all(tasks);
-    this.fire({ type: "section-end", kind, total: count });
+    this.fire({ type: "section-end", kind: reportAs, total: count });
   }
 
   private async migrateOneTerm(
-    kind: "categories" | "tags",
+    taxonomy: string,
     term: WpTerm,
     uid: string,
     pluralOverride?: string,
+    kind: Kind = "categories",
   ): Promise<void> {
-    if (this.retryFailed && !this.state.failedIds(kind).includes(term.id)) return;
+    if (this.retryFailed && !this.state.failedIds(taxonomy).includes(term.id)) return;
     try {
-      const mapped = applyMapping(term, this.mappingFor(kind === "tags" ? "tag" : "category"), {
+      const mapped = applyMapping(term, this.termMapping(taxonomy), {
         state: this.state.get(),
         strapiBaseUrl: this.cfg.strapi.baseUrl,
       });
@@ -399,12 +455,12 @@ export class Migrator extends EventEmitter {
             status: "published",
           })
         : await this.strapi.create(uid, data, pluralOverride, { status: "published" });
-      this.state.setTerm(kind, term.id, saved.documentId);
-      this.state.clearFailure(kind, term.id);
+      this.state.setTerm(taxonomy, term.id, saved.documentId);
+      this.state.clearFailure(taxonomy, term.id);
       await this.state.persist();
       this.fire({ type: "item-ok", kind, wpId: term.id, detail: `${term.slug} → ${saved.documentId}` });
     } catch (err) {
-      this.state.recordFailure(kind, term.id, (err as Error).message);
+      this.state.recordFailure(taxonomy, term.id, (err as Error).message);
       await this.state.persist();
       this.fire({ type: "item-error", kind, wpId: term.id, message: (err as Error).message });
     }
@@ -426,6 +482,16 @@ export class Migrator extends EventEmitter {
           this.cfg.statuses,
           this.retryScope(`custom:${type.restBase}`),
         )) {
+          // A single type only wants one WordPress entry — the one named, or the first.
+          if (type.single) {
+            const wanted =
+              (type.wpId !== undefined && entry.id !== type.wpId) ||
+              (type.slug !== undefined && entry.slug !== type.slug);
+            if (wanted) continue;
+            count += 1;
+            tasks.push(this.limit(() => this.migrateOneCustom(entry, type)));
+            break;
+          }
           count += 1;
           tasks.push(this.limit(() => this.migrateOneCustom(entry, type)));
         }
@@ -445,8 +511,16 @@ export class Migrator extends EventEmitter {
 
   private async migrateOneCustom(p: WpPost, type: CustomTypeConfig): Promise<void> {
     try {
-      const { documentId } = await this.upsertEntry(type.uid, p, type.pluralPath, "post", type.restBase);
+      const { documentId } = await this.upsertEntry(
+        type.uid,
+        p,
+        type.pluralPath,
+        "post",
+        type.restBase,
+        type.single === true,
+      );
       this.state.setCustom(type.restBase, p.id, documentId);
+      this.state.addRedirect(pathOf(p.link), p.slug, type.restBase, documentId);
       this.state.clearFailure(`custom:${type.restBase}`, p.id);
       await this.state.persist();
       this.fire({
@@ -480,7 +554,7 @@ export class Migrator extends EventEmitter {
       const uid = kind === "categories" ? this.cfg.strapi.categoryUid : this.cfg.strapi.tagUid;
       if (!uid) throw new Error(`No Strapi UID configured for ${kind}`);
       for await (const term of this.wp.terms(kind)) {
-        const mapped = applyMapping(term, this.mappingFor(kind === "tags" ? "tag" : "category"), {
+        const mapped = applyMapping(term, this.termMapping(kind), {
           state: this.state.get(),
           strapiBaseUrl: this.cfg.strapi.baseUrl,
         });
@@ -533,6 +607,323 @@ export class Migrator extends EventEmitter {
       for (const item of items) item.notices.push(notice("media.none", {}));
     }
     return items;
+  }
+
+
+  /** Rows for a taxonomy: its own mapping if configured, the term default otherwise. */
+  private termMapping(taxonomy: string): FieldMapping[] {
+    const set = this.cfg.mapping ?? {};
+    const own =
+      taxonomy === "categories"
+        ? set.category
+        : taxonomy === "tags"
+          ? set.tag
+          : set.taxonomy?.[taxonomy];
+    return mergeMappings(set.common, own ?? defaultTermMapping());
+  }
+
+  // ----- Authors -----
+
+  /** WordPress users become entries, relatable from a post with `terms:authors`. */
+  private async migrateAuthors(): Promise<void> {
+    const uid = this.cfg.strapi.authorUid;
+    if (!uid) return;
+    this.fire({ type: "section-start", kind: "authors", expected: await this.wp.count("users") });
+    let count = 0;
+    const tasks: Promise<void>[] = [];
+    for await (const user of this.wp.users()) {
+      count += 1;
+      tasks.push(this.limit(() => this.migrateOneAuthor(user, uid)));
+    }
+    await Promise.all(tasks);
+    this.fire({ type: "section-end", kind: "authors", total: count });
+  }
+
+  private async migrateOneAuthor(user: WpUser, uid: string): Promise<void> {
+    if (this.retryFailed && !this.state.failedIds("authors").includes(user.id)) return;
+    try {
+      const set = this.cfg.mapping ?? {};
+      const mapped = applyMapping(user, mergeMappings(set.common, set.author ?? defaultAuthorMapping()), {
+        state: this.state.get(),
+        strapiBaseUrl: this.cfg.strapi.baseUrl,
+      });
+      for (const n of mapped.notices) this.say(n);
+      if (this.cfg.dryRun) {
+        this.fire({ type: "item-ok", kind: "authors", wpId: user.id, detail: `[dry-run] ${user.slug}` });
+        return;
+      }
+      const documentId = await this.upsertRecord(
+        uid,
+        this.cfg.strapi.authorPluralPath,
+        user.id,
+        mapped.data,
+      );
+      this.state.setTerm("authors", user.id, documentId);
+      this.state.clearFailure("authors", user.id);
+      await this.state.persist();
+      this.fire({ type: "item-ok", kind: "authors", wpId: user.id, detail: `${user.slug} → ${documentId}` });
+    } catch (err) {
+      this.state.recordFailure("authors", user.id, (err as Error).message);
+      await this.state.persist();
+      this.fire({ type: "item-error", kind: "authors", wpId: user.id, message: (err as Error).message });
+    }
+  }
+
+  // ----- Comments -----
+
+  private async migrateComments(): Promise<void> {
+    const uid = this.cfg.strapi.commentUid;
+    if (!uid) return;
+    this.fire({
+      type: "section-start",
+      kind: "comments",
+      expected: await this.wp.count("comments", { status: "approve" }),
+    });
+    let count = 0;
+    const tasks: Promise<void>[] = [];
+    for await (const comment of this.wp.comments()) {
+      count += 1;
+      tasks.push(this.limit(() => this.migrateOneComment(comment, uid)));
+    }
+    await Promise.all(tasks);
+    this.fire({ type: "section-end", kind: "comments", total: count });
+  }
+
+  private async migrateOneComment(comment: WpComment, uid: string): Promise<void> {
+    if (this.retryFailed && !this.state.failedIds("comments").includes(comment.id)) return;
+    try {
+      const set = this.cfg.mapping ?? {};
+      const mapped = applyMapping(
+        comment,
+        mergeMappings(set.common, set.comment ?? defaultCommentMapping()),
+        { state: this.state.get(), strapiBaseUrl: this.cfg.strapi.baseUrl },
+      );
+      for (const n of mapped.notices) this.say(n);
+
+      // Relate to the entry it belongs to, if that entry was migrated.
+      const entry = this.state.get().posts[comment.post] ?? this.state.get().pages[comment.post];
+      if (entry) mapped.data[this.cfg.strapi.commentEntryField] = entry.documentId;
+      else {
+        this.fire({
+          type: "item-skip",
+          kind: "comments",
+          wpId: comment.id,
+          reason: `entry ${comment.post} not migrated`,
+        });
+        return;
+      }
+
+      if (this.cfg.dryRun) {
+        this.fire({ type: "item-ok", kind: "comments", wpId: comment.id, detail: "[dry-run]" });
+        return;
+      }
+      const documentId = await this.upsertRecord(
+        uid,
+        this.cfg.strapi.commentPluralPath,
+        comment.id,
+        mapped.data,
+      );
+      this.state.clearFailure("comments", comment.id);
+      await this.state.persist();
+      this.fire({ type: "item-ok", kind: "comments", wpId: comment.id, detail: documentId });
+    } catch (err) {
+      this.state.recordFailure("comments", comment.id, (err as Error).message);
+      await this.state.persist();
+      this.fire({ type: "item-error", kind: "comments", wpId: comment.id, message: (err as Error).message });
+    }
+  }
+
+  // ----- Navigation menus -----
+
+  /**
+   * A menu and its items land as one entry: the items are a tree, and modelling every item as
+   * its own content-type would force a shape on the destination that few projects want.
+   */
+  private async migrateMenus(): Promise<void> {
+    const uid = this.cfg.strapi.menuUid;
+    if (!uid) return;
+    this.fire({ type: "section-start", kind: "menus", expected: await this.wp.count("menus") });
+    let count = 0;
+    for await (const menu of this.wp.menus()) {
+      count += 1;
+      await this.migrateOneMenu(menu, uid);
+    }
+    await Promise.all([]);
+    this.fire({ type: "section-end", kind: "menus", total: count });
+  }
+
+  private async migrateOneMenu(menu: WpMenu, uid: string): Promise<void> {
+    try {
+      const items: WpMenuItem[] = [];
+      for await (const item of this.wp.menuItems(menu.id)) items.push(item);
+      const set = this.cfg.mapping ?? {};
+      const mapped = applyMapping(menu, mergeMappings(set.common, set.menu ?? defaultMenuMapping()), {
+        state: this.state.get(),
+        strapiBaseUrl: this.cfg.strapi.baseUrl,
+        virtuals: { $items: this.buildMenuTree(items) },
+      });
+      for (const n of mapped.notices) this.say(n);
+      if (this.cfg.dryRun) {
+        this.fire({
+          type: "item-ok",
+          kind: "menus",
+          wpId: menu.id,
+          detail: `[dry-run] ${menu.slug} (${items.length} items)`,
+        });
+        return;
+      }
+      const documentId = await this.upsertRecord(
+        uid,
+        this.cfg.strapi.menuPluralPath,
+        menu.id,
+        mapped.data,
+      );
+      this.state.clearFailure("menus", menu.id);
+      await this.state.persist();
+      this.fire({
+        type: "item-ok",
+        kind: "menus",
+        wpId: menu.id,
+        detail: `${menu.slug} (${items.length} items) → ${documentId}`,
+      });
+    } catch (err) {
+      this.state.recordFailure("menus", menu.id, (err as Error).message);
+      await this.state.persist();
+      this.fire({ type: "item-error", kind: "menus", wpId: menu.id, message: (err as Error).message });
+    }
+  }
+
+  /** Nest menu items by parent, and point internal links at what they became in Strapi. */
+  private buildMenuTree(items: WpMenuItem[]): unknown[] {
+    const state = this.state.get();
+    const toNode = (item: WpMenuItem) => {
+      const target =
+        item.object_id !== undefined
+          ? (state.posts[item.object_id] ?? state.pages[item.object_id])
+          : undefined;
+      return {
+        wpId: item.id,
+        label: decodeEntities(
+          typeof item.title === "string" ? item.title : (item.title?.rendered ?? ""),
+        ).trim(),
+        url: item.url,
+        order: item.menu_order,
+        type: item.type,
+        object: item.object,
+        /** documentId of the migrated entry this item points at, when there is one. */
+        documentId: target?.documentId,
+        children: [] as unknown[],
+      };
+    };
+    const nodes = new Map(items.map((i) => [i.id, toNode(i)]));
+    const roots: unknown[] = [];
+    for (const item of items) {
+      const node = nodes.get(item.id);
+      if (!node) continue;
+      const parent = item.parent ? nodes.get(item.parent) : undefined;
+      if (parent) parent.children.push(node);
+      else roots.push(node);
+    }
+    return roots;
+  }
+
+  // ----- Hierarchies -----
+
+  /** Second pass: a parent's documentId only exists once every page has been created. */
+  private async linkPageHierarchy(): Promise<void> {
+    const field = this.cfg.strapi.parentField;
+    if (!field || this.cfg.dryRun) return;
+    const pages = this.state.get().pages;
+    let linked = 0;
+    for await (const page of this.wp.pages(this.cfg.statuses)) {
+      const self = pages[page.id];
+      const parent = page.parent ? pages[page.parent] : undefined;
+      if (!self || !parent) continue;
+      try {
+        await this.strapi.update(
+          this.cfg.strapi.pageUid,
+          self.documentId,
+          { [field]: parent.documentId },
+          this.cfg.strapi.pagePluralPath,
+          { status: page.status === "publish" ? "published" : "draft" },
+        );
+        linked += 1;
+      } catch (err) {
+        this.fire({ type: "item-error", kind: "pages", wpId: page.id, message: (err as Error).message });
+      }
+    }
+    if (linked > 0) this.say(notice("hierarchy.linked", { kind: "pages", count: linked }, "info"));
+  }
+
+  /** Same for hierarchical taxonomies — WordPress categories can nest. */
+  private async linkTermHierarchy(): Promise<void> {
+    const field = this.cfg.strapi.termParentField;
+    const uid = this.cfg.strapi.categoryUid;
+    if (!field || !uid || this.cfg.dryRun) return;
+    const bucket = this.state.termBucket("categories");
+    let linked = 0;
+    for await (const term of this.wp.terms("categories")) {
+      const self = bucket[term.id];
+      const parent = term.parent ? bucket[term.parent] : undefined;
+      if (!self || !parent) continue;
+      try {
+        await this.strapi.update(
+          uid,
+          self.documentId,
+          { [field]: parent.documentId },
+          this.cfg.strapi.categoryPluralPath,
+          { status: "published" },
+        );
+        linked += 1;
+      } catch (err) {
+        this.fire({ type: "item-error", kind: "categories", wpId: term.id, message: (err as Error).message });
+      }
+    }
+    if (linked > 0) {
+      this.say(notice("hierarchy.linked", { kind: "categories", count: linked }, "info"));
+    }
+  }
+
+  // ----- Redirects -----
+
+  /** The old-URL table, so nothing 404s the day the WordPress install goes away. */
+  private async writeRedirects(): Promise<void> {
+    const redirects = this.state.get().redirects;
+    if (redirects.length === 0) return;
+    if (this.cfg.redirectsFile) {
+      try {
+        await writeFile(this.cfg.redirectsFile, JSON.stringify(redirects, null, 2), "utf8");
+      } catch (err) {
+        this.say(
+          notice("redirects.writeFailed", { file: this.cfg.redirectsFile, error: (err as Error).message }, "error"),
+        );
+        return;
+      }
+    }
+    this.say(
+      notice("redirects.written", { count: redirects.length, file: this.cfg.redirectsFile ?? "" }, "info"),
+    );
+  }
+
+  /** Upsert a record that is not a post-like entry (author, comment, menu). */
+  private async upsertRecord(
+    uid: string,
+    pluralOverride: string | undefined,
+    wpId: number,
+    data: Record<string, unknown>,
+  ): Promise<string> {
+    const existing = await this.strapi.findOneBy(
+      uid,
+      this.cfg.strapi.correlationField,
+      wpId,
+      pluralOverride,
+    );
+    const saved = existing
+      ? await this.strapi.update(uid, existing.documentId, data, pluralOverride, {
+          status: "published",
+        })
+      : await this.strapi.create(uid, data, pluralOverride, { status: "published" });
+    return saved.documentId;
   }
 
   // ----- Media -----
@@ -781,6 +1172,7 @@ export class Migrator extends EventEmitter {
     pluralOverride?: string,
     kind: "post" | "page" = "post",
     restBase?: string,
+    single = false,
   ): Promise<{ documentId: string }> {
     const { data, notices } = await this.buildEntryData(p, kind, restBase);
     for (const n of notices) this.say(n);
@@ -789,7 +1181,15 @@ export class Migrator extends EventEmitter {
     }
     // Strapi v5 publishes by `status`; a `publishedAt` in the payload is stripped and the
     // write defaults to a draft. Anything not published in WordPress stays a draft here.
-    const write: WriteOptions = { status: p.status === "publish" ? "published" : "draft" };
+    const write: WriteOptions = {
+      status: p.status === "publish" ? "published" : "draft",
+      ...(single ? { single: true } : {}),
+    };
+    // A single type holds one document: there is nothing to look up, and PUT replaces it.
+    if (single) {
+      const saved = await this.strapi.create(uid, data, pluralOverride, write);
+      return { documentId: saved.documentId };
+    }
     const existing = await this.strapi.findOneBy(
       uid,
       this.cfg.strapi.correlationField,
@@ -818,6 +1218,7 @@ export class Migrator extends EventEmitter {
         this.cfg.strapi.postPluralPath,
       );
       this.state.setPost(p.id, documentId);
+      this.state.addRedirect(pathOf(p.link), p.slug, "posts", documentId);
       this.state.clearFailure("posts", p.id);
       await this.state.persist();
       this.fire({ type: "item-ok", kind: "posts", wpId: p.id, detail: `${p.slug} → ${documentId}` });
@@ -842,6 +1243,7 @@ export class Migrator extends EventEmitter {
         "page",
       );
       this.state.setPage(p.id, documentId);
+      this.state.addRedirect(pathOf(p.link), p.slug, "pages", documentId);
       this.state.clearFailure("pages", p.id);
       await this.state.persist();
       this.fire({ type: "item-ok", kind: "pages", wpId: p.id, detail: `${p.slug} → ${documentId}` });

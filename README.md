@@ -297,8 +297,16 @@ are never touched. Turn it off with `HTML_FALLBACK=false` (CLI) or the toggle in
 | **Drafts, pending, scheduled, private** | `WP_STATUSES=publish,draft,pending,future,private`. Needs WordPress credentials; non-published entries land as Strapi drafts (`publishedAt: null`). |
 | **Custom post types** | `WP_CUSTOM_TYPES=portfolio:api::project.project,event:api::event.event\|evenements` — `restBase:uid`, with an optional `\|pluralPath`. |
 
-Still not migrated: authors, menus, ACF fields, comments, SEO metadata and redirects. See
-[Extending](#extending) for where to hook each of them in.
+| **Authors** | `STRAPI_AUTHOR_UID` (or the field in the UI). Users become entries; attach one with `{ "target": "auteur", "source": "author", "transforms": ["terms:authors"] }`. |
+| **Custom taxonomies** | `WP_TAXONOMIES=genre:api::genre.genre`. Terms migrate into their own bucket; attach them with `terms:genre` against the post's own `genre` field. |
+| **Page and category hierarchy** | `STRAPI_PARENT_FIELD` / `STRAPI_TERM_PARENT_FIELD`. A second pass links each child to its parent once every document exists — without it, trees import flat. |
+| **Comments** | `STRAPI_COMMENT_UID`. Approved comments only, related to their entry through `strapi.commentEntryField`; a comment whose entry was not migrated is skipped, not failed. |
+| **Navigation menus** | `STRAPI_MENU_UID` (needs WordPress credentials). One entry per menu, items as a nested JSON tree where each item carries the `documentId` of what it points at. |
+| **Redirects** | `REDIRECTS_FILE=./redirects.json`. Every entry records its old WordPress path, so nothing 404s once the old site is gone. Kept in the state file either way. |
+| **Strapi single types** | `WP_CUSTOM_TYPES` entry with `single` — the migrator PUTs one document instead of upserting a collection, taking the entry named by `wpId`/`slug`. |
+
+Still not migrated: multilingual sites (WPML/Polylang → Strapi i18n), post revisions, and
+relations between custom post types.
 
 Media URLs that survive the rewrite — files hosted on another domain, or attachments missing
 from the library — are listed as warnings so they can be dealt with *before* the WordPress

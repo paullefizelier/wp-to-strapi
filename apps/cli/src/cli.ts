@@ -61,6 +61,18 @@ function loadMapping(path: string | undefined): MappingSet | undefined {
   }
 }
 
+/** WP_TAXONOMIES="genre:api::genre.genre,humeur:api::mood.mood" */
+function parseTaxonomies(value: string | undefined) {
+  return (splitList(value) ?? []).flatMap((entry) => {
+    const colon = entry.indexOf(":");
+    if (colon <= 0) return [];
+    const restBase = entry.slice(0, colon).trim();
+    const [uid, pluralPath] = entry.slice(colon + 1).split("|").map((part) => part.trim());
+    if (!restBase || !uid) return [];
+    return [pluralPath ? { restBase, uid, pluralPath } : { restBase, uid }];
+  });
+}
+
 function loadConfigFromEnv() {
   return buildConfig({
     wp: {
@@ -77,6 +89,11 @@ function loadConfigFromEnv() {
       tagUid: process.env.STRAPI_TAG_UID,
       categoryPluralPath: process.env.STRAPI_CATEGORY_PLURAL,
       tagPluralPath: process.env.STRAPI_TAG_PLURAL,
+      authorUid: process.env.STRAPI_AUTHOR_UID,
+      commentUid: process.env.STRAPI_COMMENT_UID,
+      menuUid: process.env.STRAPI_MENU_UID,
+      parentField: process.env.STRAPI_PARENT_FIELD,
+      termParentField: process.env.STRAPI_TERM_PARENT_FIELD,
     },
     concurrency: process.env.CONCURRENCY ? Number(process.env.CONCURRENCY) : undefined,
     retries: process.env.RETRIES ? Number(process.env.RETRIES) : undefined,
@@ -87,10 +104,15 @@ function loadConfigFromEnv() {
     statuses: splitList(process.env.WP_STATUSES) ?? undefined,
     customTypes: parseCustomTypes(process.env.WP_CUSTOM_TYPES),
     mapping: loadMapping(process.env.MAPPING_FILE),
+    taxonomies: parseTaxonomies(process.env.WP_TAXONOMIES),
+    redirectsFile: process.env.REDIRECTS_FILE,
   });
 }
 
-const KINDS: Kind[] = ["media", "categories", "tags", "posts", "pages", "custom"];
+const KINDS: Kind[] = [
+  "media", "categories", "tags", "taxonomies", "authors",
+  "posts", "pages", "custom", "comments", "menus",
+];
 
 interface PreviewArgs {
   kind: "posts" | "pages" | "categories" | "tags" | "custom";

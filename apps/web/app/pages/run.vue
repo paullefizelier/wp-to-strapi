@@ -12,17 +12,25 @@ const KIND_LABELS: Record<Kind, string> = {
   media: "Médias",
   categories: "Catégories",
   tags: "Étiquettes",
+  taxonomies: "Taxonomies",
+  authors: "Auteurs",
   posts: "Articles",
   pages: "Pages",
   custom: "Types personnalisés",
+  comments: "Commentaires",
+  menus: "Menus",
 };
 const KIND_ICONS: Record<Kind, string> = {
   media: "i-lucide-image",
   categories: "i-lucide-folder-tree",
   tags: "i-lucide-tags",
+  taxonomies: "i-lucide-library",
+  authors: "i-lucide-users",
   posts: "i-lucide-newspaper",
   pages: "i-lucide-file-text",
   custom: "i-lucide-shapes",
+  comments: "i-lucide-message-square",
+  menus: "i-lucide-menu",
 };
 
 const events = ref<MigratorEvent[]>([]);

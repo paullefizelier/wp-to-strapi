@@ -42,6 +42,54 @@ export interface WpTerm {
   taxonomy?: string;
 }
 
+/** A WordPress author. */
+export interface WpUser {
+  id: number;
+  name: string;
+  slug: string;
+  description?: string;
+  url?: string;
+  link?: string;
+  avatar_urls?: Record<string, string>;
+}
+
+/** A comment, as returned by /wp/v2/comments. */
+export interface WpComment {
+  id: number;
+  post: number;
+  parent: number;
+  author: number;
+  author_name: string;
+  author_url?: string;
+  date_gmt: string;
+  content: WpRendered;
+  status: string;
+  link?: string;
+}
+
+/** A navigation menu (WP 5.9+, authenticated). */
+export interface WpMenu {
+  id: number;
+  name: string;
+  slug: string;
+  description?: string;
+  locations?: string[];
+}
+
+export interface WpMenuItem {
+  id: number;
+  title: WpRendered | string;
+  url: string;
+  status: string;
+  parent: number;
+  menu_order: number;
+  object?: string;
+  object_id?: number;
+  type?: string;
+  target?: string;
+  menus?: number;
+}
+
 export interface WpMedia {
   id: number;
   date: string;

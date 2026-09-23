@@ -6,6 +6,8 @@ import type { TargetSchema } from "./introspect.js";
  */
 export interface WriteOptions {
   status?: "draft" | "published";
+  /** Write into a single type: one document, no id, PUT on the collection root. */
+  single?: boolean;
 }
 import type { StrapiEntry, StrapiUploadFile } from "./types.js";
 

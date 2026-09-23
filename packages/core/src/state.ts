@@ -22,6 +22,13 @@ export interface MigrationState {
   /** Custom post types, keyed by their REST base. */
   custom: Record<string, Record<number, { documentId: string }>>;
   /**
+   * Any other taxonomy (custom taxonomies, authors), keyed by its REST base then WP id.
+   * `categories` and `tags` keep their own buckets above for backwards compatibility.
+   */
+  terms: Record<string, Record<number, { documentId: string }>>;
+  /** Old WordPress URL → what it became, for the redirect table. */
+  redirects: Array<{ from: string; slug: string; kind: string; documentId: string }>;
+  /**
    * Entries that failed, keyed by kind then WordPress id. Kept so a run can report them at the
    * end and so the next one can retry just those instead of the whole site.
    */
@@ -35,6 +42,8 @@ const EMPTY: MigrationState = {
   categories: {},
   tags: {},
   custom: {},
+  terms: {},
+  redirects: [],
   failures: {},
 };
 
@@ -82,8 +91,27 @@ export class StateStore {
     this.dirty = true;
   }
 
-  setTerm(taxonomy: "categories" | "tags", wpId: number, documentId: string): void {
-    this.state[taxonomy][wpId] = { documentId };
+  /** `categories` and `tags` keep dedicated buckets; anything else lands under `terms`. */
+  setTerm(taxonomy: string, wpId: number, documentId: string): void {
+    const bucket =
+      taxonomy === "categories" || taxonomy === "tags"
+        ? this.state[taxonomy]
+        : (this.state.terms[taxonomy] ??= {});
+    bucket[wpId] = { documentId };
+    this.dirty = true;
+  }
+
+  /** Read a taxonomy bucket by name, wherever it lives. */
+  termBucket(taxonomy: string): Record<number, { documentId: string }> {
+    if (taxonomy === "categories") return this.state.categories;
+    if (taxonomy === "tags") return this.state.tags;
+    return this.state.terms[taxonomy] ?? {};
+  }
+
+  addRedirect(from: string, slug: string, kind: string, documentId: string): void {
+    if (!from) return;
+    if (this.state.redirects.some((r) => r.from === from)) return;
+    this.state.redirects.push({ from, slug, kind, documentId });
     this.dirty = true;
   }
 

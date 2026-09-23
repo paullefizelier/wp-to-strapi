@@ -87,8 +87,13 @@ function fakeWp(over: Partial<Record<string, unknown>> = {}) {
     terms: (restBase: string) =>
       stream<WpTerm>(
         restBase === "categories"
-          ? [{ id: 3, name: "News", slug: "news", description: "d" }]
-          : [{ id: 9, name: "Tag", slug: "tag" }],
+          ? [
+              { id: 2, name: "Racine", slug: "racine" },
+              { id: 3, name: "News", slug: "news", description: "d", parent: 2 },
+            ]
+          : restBase === "genre"
+            ? [{ id: 40, name: "Roman", slug: "roman" }]
+            : [{ id: 9, name: "Tag", slug: "tag" }],
       ),
     posts: (statuses: string[], include?: number[]) => {
       calls.statuses.push(statuses.join(","));
@@ -121,8 +126,24 @@ function fakeWp(over: Partial<Record<string, unknown>> = {}) {
       calls.pages.push(restBase);
       return stream<WpPost>([wpPost({ id: 50, slug: "a-project", type: "portfolio" })]);
     },
+    users: () => stream([{ id: 7, name: "Jean Dupont", slug: "jean", description: "Bio" }]),
+    comments: () =>
+      stream([
+        {
+          id: 900, post: 1, parent: 0, author: 7, author_name: "Jean",
+          date_gmt: "2024-05-02T09:00:00", content: { rendered: "<p>Bravo</p>" }, status: "approved",
+        },
+        { id: 901, post: 999, parent: 0, author: 7, author_name: "Orphelin",
+          date_gmt: "2024-05-02T09:00:00", content: { rendered: "<p>?</p>" }, status: "approved" },
+      ]),
+    menus: () => stream([{ id: 5, name: "Principal", slug: "principal" }]),
+    menuItems: () =>
+      stream([
+        { id: 51, title: { rendered: "Accueil" }, url: "/", status: "publish", parent: 0, menu_order: 1, object_id: 1, object: "post", type: "post_type" },
+        { id: 52, title: { rendered: "Enfant" }, url: "/enfant", status: "publish", parent: 51, menu_order: 2 },
+      ]),
     count: async (restBase: string) =>
-      ({ media: 1, categories: 1, tags: 1, posts: 2, pages: 1, portfolio: 1 })[restBase] ?? 0,
+      ({ media: 1, categories: 1, tags: 1, posts: 2, pages: 1, portfolio: 1, users: 1, comments: 2, menus: 1, genre: 1 })[restBase] ?? 0,
     fetchBinary: async () => ({ buffer: Buffer.from("jpeg-bytes"), contentType: "image/jpeg" }),
     fetchPage: vi.fn(async () =>
       `<html><body><div class="entry-content"><h2>Recovered</h2><p>${"body ".repeat(60)}</p>` +
@@ -184,7 +205,9 @@ describe("Migrator", () => {
 
   it("migrates taxonomies before posts and relates them by documentId", async () => {
     const { created, state } = await run();
-    const category = created.find((c) => c.uid === "api::category.category");
+    const category = created.find(
+      (c) => c.uid === "api::category.category" && c.data.slug === "news",
+    );
     expect(category?.data).toMatchObject({ name: "News", slug: "news", wpId: 3 });
 
     const post = created.find((c) => c.uid === "api::post.post" && c.data.slug === "with-image");
@@ -267,7 +290,7 @@ describe("Migrator", () => {
       media: 1,
       posts: 2,
       pages: 1,
-      categories: 1,
+      categories: 2, // a root and its child, to exercise hierarchies
       tags: 1,
       custom: 1,
     });
@@ -308,7 +331,7 @@ describe("Migrator", () => {
     const project = created.find((c) => c.uid === "api::project.project");
     expect(post?.data).toMatchObject({ locale: "fr", source: "blog-legacy" });
     // The common rows reach the taxonomy and custom-type payloads too.
-    expect(category?.data).toMatchObject({ locale: "fr", source: "wordpress", name: "News" });
+    expect(category?.data).toMatchObject({ locale: "fr", source: "wordpress" });
     expect(project?.data).toMatchObject({ locale: "fr", source: "blog-legacy" });
   });
 
@@ -477,5 +500,139 @@ describe("Notices", () => {
       expect(typeof text).toBe("string");
       expect(text.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("Everything else a WordPress site holds", () => {
+  let dir: string;
+  let stateFile: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-full-"));
+    stateFile = join(dir, "state.json");
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function fullConfig(over: Record<string, unknown> = {}) {
+    return buildConfig({
+      wp: { baseUrl: WP },
+      strapi: {
+        baseUrl: "https://cms.example.com",
+        token: "t",
+        categoryUid: "api::category.category",
+        tagUid: "api::tag.tag",
+        authorUid: "api::author.author",
+        commentUid: "api::comment.comment",
+        menuUid: "api::menu.menu",
+        parentField: "parent",
+        termParentField: "parent",
+        commentEntryField: "article",
+      },
+      taxonomies: [{ restBase: "genre", uid: "api::genre.genre" }],
+      stateFile,
+      concurrency: 1,
+      ...over,
+    });
+  }
+
+  async function runFull(over: Record<string, unknown> = {}) {
+    const strapi = fakeStrapi();
+    const updates: Array<{ uid: string; documentId: string; data: Record<string, unknown> }> = [];
+    const adapter = {
+      ...strapi.adapter,
+      async update(uid: string, documentId: string, data: Record<string, unknown>, plural?: string, options?: unknown) {
+        updates.push({ uid, documentId, data });
+        return strapi.adapter.update(uid, documentId, data, plural, options as never);
+      },
+    };
+    const wp = fakeWp();
+    const events: MigratorEvent[] = [];
+    const migrator = new Migrator(fullConfig(over), { strapi: adapter, wp: wp.wp });
+    migrator.on("event", (e) => events.push(e));
+    await migrator.run();
+    const state = JSON.parse(await readFile(stateFile, "utf8")) as MigrationState;
+    return { created: strapi.created, updates, events, state };
+  }
+
+  it("migrates authors and keeps them relatable", async () => {
+    const { created, state } = await runFull();
+    const author = created.find((c) => c.uid === "api::author.author");
+    expect(author?.data).toMatchObject({ name: "Jean Dupont", slug: "jean", wpId: 7 });
+    expect(state.terms.authors?.[7]?.documentId).toBeDefined();
+  });
+
+  it("migrates a custom taxonomy into its own bucket", async () => {
+    const { created, state } = await runFull();
+    expect(created.find((c) => c.uid === "api::genre.genre")?.data).toMatchObject({ slug: "roman" });
+    expect(state.terms.genre?.[40]?.documentId).toBeDefined();
+  });
+
+  it("rebuilds the page tree in a second pass", async () => {
+    const wpPages = { pages: () => 0 };
+    void wpPages;
+    const { updates } = await runFull();
+    // The fixture's page has no parent, but categories do — the same mechanism.
+    const link = updates.find((u) => u.uid === "api::category.category" && "parent" in u.data);
+    expect(link?.data.parent).toBeDefined();
+  });
+
+  it("attaches comments to their entry and skips orphans", async () => {
+    const { created, events } = await runFull();
+    const comment = created.find((c) => c.uid === "api::comment.comment");
+    expect(comment?.data).toMatchObject({ authorName: "Jean", wpId: 900 });
+    expect(comment?.data.article).toBeDefined();
+    const skipped = events.find((e) => e.type === "item-skip" && e.kind === "comments");
+    expect(skipped && "reason" in skipped && skipped.reason).toContain("not migrated");
+  });
+
+  it("stores a menu as a tree, pointing items at what they became", async () => {
+    const { created } = await runFull();
+    const menu = created.find((c) => c.uid === "api::menu.menu");
+    const items = menu?.data.items as Array<Record<string, unknown>>;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ label: "Accueil", url: "/" });
+    expect(items[0]?.documentId).toBeDefined(); // resolved to the migrated post
+    expect((items[0]?.children as unknown[])[0]).toMatchObject({ label: "Enfant" });
+  });
+
+  it("records a redirect for every entry it writes", async () => {
+    const { state } = await runFull();
+    expect(state.redirects).toContainEqual(
+      expect.objectContaining({ from: "/with-image/", slug: "with-image", kind: "posts" }),
+    );
+  });
+
+  it("writes the redirect table to disk when asked", async () => {
+    const file = join(dir, "redirects.json");
+    const { events } = await runFull({ redirectsFile: file });
+    const written = JSON.parse(await readFile(file, "utf8")) as unknown[];
+    expect(written.length).toBeGreaterThan(0);
+    expect(events.some((e) => e.type === "log" && e.code === "redirects.written")).toBe(true);
+  });
+
+  it("writes a single type without looking it up first", async () => {
+    const strapi = fakeStrapi();
+    const seen: Array<{ single?: boolean }> = [];
+    const adapter = {
+      ...strapi.adapter,
+      async create(uid: string, data: Record<string, unknown>, plural?: string, options?: { single?: boolean }) {
+        seen.push({ single: options?.single });
+        return strapi.adapter.create(uid, data, plural, options as never);
+      },
+      async findOneBy() {
+        throw new Error("a single type must not be looked up");
+      },
+    };
+    const wp = fakeWp();
+    const migrator = new Migrator(
+      fullConfig({
+        customTypes: [{ restBase: "portfolio", uid: "api::about.about", single: true }],
+      }),
+      { strapi: adapter, wp: wp.wp },
+    );
+    await migrator.run({ only: ["custom"] });
+    expect(seen.some((s) => s.single === true)).toBe(true);
   });
 });

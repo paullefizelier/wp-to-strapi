@@ -17,6 +17,7 @@ const empty = (): MigrationConfigInput => ({
   htmlFallback: true,
   statuses: ["publish"],
   customTypes: [],
+  taxonomies: [],
   mapping: {},
   only: ["media", "posts", "pages"],
   retryFailed: false,

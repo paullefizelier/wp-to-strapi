@@ -34,6 +34,11 @@ export const MigrationConfigSchema = z.object({
     postPluralPath: z.string().optional(),
     pagePluralPath: z.string().optional(),
     categoryUid: z.string().optional(),
+    authorUid: z.string().optional(),
+    commentUid: z.string().optional(),
+    menuUid: z.string().optional(),
+    parentField: z.string().optional(),
+    termParentField: z.string().optional(),
     categoryPluralPath: z.string().optional(),
     tagUid: z.string().optional(),
     tagPluralPath: z.string().optional(),
@@ -54,8 +59,17 @@ export const MigrationConfigSchema = z.object({
     )
     .default([]),
   mapping: MappingSetSchema.default({}),
+  taxonomies: z
+    .array(z.object({ restBase: z.string().min(1), uid: z.string().min(1), pluralPath: z.string().optional() }))
+    .default([]),
+  redirectsFile: z.string().optional(),
   only: z
-    .array(z.enum(["media", "categories", "tags", "posts", "pages", "custom"]))
+    .array(
+      z.enum([
+        "media", "categories", "tags", "taxonomies", "authors",
+        "posts", "pages", "custom", "comments", "menus",
+      ]),
+    )
     .default(["media", "posts", "pages"]),
   /** Re-run only what the previous run recorded as failed. */
   retryFailed: z.boolean().default(false),

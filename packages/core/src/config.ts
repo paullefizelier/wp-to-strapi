@@ -32,6 +32,33 @@ export interface StrapiConfig {
    * instead of duplicating, so the mapping must write it.
    */
   correlationField: string;
+  /**
+   * Relation field holding a page's parent. Set it to rebuild the page tree in a second pass;
+   * left unset, pages import flat.
+   */
+  parentField?: string;
+  /** Same, for hierarchical taxonomies (WordPress categories). */
+  termParentField?: string;
+  /** Set to migrate WordPress users into a content-type, relatable with `terms:authors`. */
+  authorUid?: string;
+  authorPluralPath?: string;
+  /** Set to migrate approved comments, related to their entry. */
+  commentUid?: string;
+  commentPluralPath?: string;
+  /** Set to migrate navigation menus; items land as a JSON tree on the entry. */
+  menuUid?: string;
+  menuPluralPath?: string;
+  /** Relation field linking a comment to its entry. */
+  commentEntryField: string;
+}
+
+/** A WordPress taxonomy beyond categories and tags. */
+export interface TaxonomyConfig {
+  /** REST base under /wp/v2 — `genre` for /wp-json/wp/v2/genre. */
+  restBase: string;
+  /** Target Strapi UID. */
+  uid: string;
+  pluralPath?: string;
 }
 
 /** A WordPress custom post type mapped onto a Strapi collection. */
@@ -42,6 +69,13 @@ export interface CustomTypeConfig {
   uid: string;
   /** Override when the plural REST path is not the naive pluralisation of the UID. */
   pluralPath?: string;
+  /**
+   * Write into a Strapi single type rather than a collection. WordPress still returns a list,
+   * so the newest entry wins unless `wpId` or `slug` names the one to take.
+   */
+  single?: boolean;
+  wpId?: number;
+  slug?: string;
 }
 
 export interface AppConfig {
@@ -65,6 +99,13 @@ export interface AppConfig {
   retries: number;
   /** Custom post types to migrate alongside posts and pages. */
   customTypes: CustomTypeConfig[];
+  /** Custom taxonomies to migrate; attach them with the `terms:<restBase>` transform. */
+  taxonomies: TaxonomyConfig[];
+  /**
+   * Where to write the old-URL → new-entry table. Unset means no file, but the redirects are
+   * still recorded in the state.
+   */
+  redirectsFile?: string;
   /**
    * Field mapping. A kind's rows replace the built-in mapping entirely, so what you configure
    * is what gets written; `common` rows are merged underneath every kind. Omit for the
@@ -82,6 +123,7 @@ export const defaults = {
   categoryField: "categories",
   tagField: "tags",
   correlationField: "wpId",
+  commentEntryField: "article",
   concurrency: 4,
   pageSize: 100,
   stateFile: "./.migration-state.json",
@@ -102,6 +144,8 @@ export function buildConfig(input: {
   statuses?: string[];
   retries?: number;
   customTypes?: CustomTypeConfig[];
+  taxonomies?: TaxonomyConfig[];
+  redirectsFile?: string;
   mapping?: MappingSet;
 }): AppConfig {
   return {
@@ -124,6 +168,15 @@ export function buildConfig(input: {
       categoryField: input.strapi.categoryField ?? defaults.categoryField,
       tagField: input.strapi.tagField ?? defaults.tagField,
       correlationField: input.strapi.correlationField ?? defaults.correlationField,
+      parentField: input.strapi.parentField,
+      termParentField: input.strapi.termParentField,
+      authorUid: input.strapi.authorUid,
+      authorPluralPath: input.strapi.authorPluralPath,
+      commentUid: input.strapi.commentUid,
+      commentPluralPath: input.strapi.commentPluralPath,
+      menuUid: input.strapi.menuUid,
+      menuPluralPath: input.strapi.menuPluralPath,
+      commentEntryField: input.strapi.commentEntryField ?? defaults.commentEntryField,
     },
     concurrency: input.concurrency ?? defaults.concurrency,
     pageSize: input.pageSize ?? defaults.pageSize,
@@ -134,6 +187,8 @@ export function buildConfig(input: {
       input.statuses && input.statuses.length > 0 ? [...input.statuses] : [...defaults.statuses],
     retries: input.retries ?? defaults.retries,
     customTypes: input.customTypes ? [...input.customTypes] : [],
+    taxonomies: input.taxonomies ? [...input.taxonomies] : [],
+    redirectsFile: input.redirectsFile,
     mapping: input.mapping ?? {},
   };
 }

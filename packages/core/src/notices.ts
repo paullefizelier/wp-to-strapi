@@ -28,6 +28,9 @@ export const NOTICE_CODES = [
   "failures.header",
   "failures.group",
   "failures.hint",
+  "hierarchy.linked",
+  "redirects.written",
+  "redirects.writeFailed",
 ] as const;
 
 export type NoticeCode = (typeof NOTICE_CODES)[number];
@@ -52,6 +55,9 @@ export interface NoticeParamsByCode {
   "failures.header": { count: number };
   "failures.group": { count: number; kinds: string; cause: string; ids: string; more: boolean };
   "failures.hint": Record<string, never>;
+  "hierarchy.linked": { kind: string; count: number };
+  "redirects.written": { count: number; file: string };
+  "redirects.writeFailed": { file: string; error: string };
 }
 
 export type NoticeParams<C extends NoticeCode = NoticeCode> = NoticeParamsByCode[C];
@@ -102,6 +108,10 @@ const EN: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
     `${p.count} entr${p.count === 1 ? "y" : "ies"} failed, grouped by cause:`,
   "failures.group": (p) =>
     `  ${p.count}× [${p.kinds}] ${p.cause} (ids ${p.ids}${p.more ? ", …" : ""})`,
+  "hierarchy.linked": (p) => `${p.kind}: ${p.count} parent link(s) restored.`,
+  "redirects.written": (p) =>
+    `${p.count} redirect(s) recorded${p.file ? ` and written to ${p.file}` : ""}.`,
+  "redirects.writeFailed": (p) => `Could not write the redirect table to ${p.file}: ${p.error}`,
   "failures.hint": () => "Re-run with retryFailed (CLI: --retry-failed) to retry just these.",
 };
 

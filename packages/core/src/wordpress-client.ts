@@ -1,7 +1,16 @@
 import { request } from "undici";
 import { flattenEntity, VIRTUAL_SOURCES, type SourceField } from "./introspect.js";
 import { HttpStatusError, parseRetryAfter, withRetry } from "./retry.js";
-import type { WpMedia, WpPage, WpPost, WpTerm } from "./types.js";
+import type {
+  WpComment,
+  WpMedia,
+  WpMenu,
+  WpMenuItem,
+  WpPage,
+  WpPost,
+  WpTerm,
+  WpUser,
+} from "./types.js";
 
 export interface WordPressClientOptions {
   baseUrl: string;
@@ -158,6 +167,25 @@ export class WordPressClient {
   /** Terms of a taxonomy (`categories`, `tags`, or a custom taxonomy's REST base). */
   terms(restBase: string): AsyncGenerator<WpTerm> {
     return this.paginate<WpTerm>(`/${restBase.replace(/^\/+/, "")}`);
+  }
+
+  /** Authors. `/users` only lists users with published content unless authenticated. */
+  users(): AsyncGenerator<WpUser> {
+    return this.paginate<WpUser>("/users");
+  }
+
+  /** Approved comments. */
+  comments(): AsyncGenerator<WpComment> {
+    return this.paginate<WpComment>("/comments", { status: "approve" });
+  }
+
+  /** Navigation menus and their items. Both need authentication (WP 5.9+). */
+  menus(): AsyncGenerator<WpMenu> {
+    return this.paginate<WpMenu>("/menus");
+  }
+
+  menuItems(menuId: number): AsyncGenerator<WpMenuItem> {
+    return this.paginate<WpMenuItem>("/menu-items", { menus: menuId });
   }
 
   media(): AsyncGenerator<WpMedia> {

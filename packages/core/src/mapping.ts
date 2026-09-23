@@ -31,6 +31,11 @@ export interface MappingSet {
   page?: FieldMapping[];
   category?: FieldMapping[];
   tag?: FieldMapping[];
+  author?: FieldMapping[];
+  comment?: FieldMapping[];
+  menu?: FieldMapping[];
+  /** Keyed by the taxonomy's REST base; falls back to the term mapping. */
+  taxonomy?: Record<string, FieldMapping[]>;
   /** Keyed by the custom type's REST base. Falls back to `post` when absent. */
   custom?: Record<string, FieldMapping[]>;
 }
@@ -84,11 +89,20 @@ export const TRANSFORMS: Record<string, TransformFn> = {
     if (!url) return undefined;
     return url.startsWith("http") ? url : `${ctx.strapiBaseUrl.replace(/\/+$/, "")}${url}`;
   },
-  /** WP term ids → Strapi documentIds. `terms:categories` or `terms:tags`. */
+  /**
+   * WP term ids → Strapi documentIds. `terms:categories`, `terms:tags`, or any other
+   * taxonomy REST base — `terms:genre`, `terms:authors` — once that step has run.
+   */
   terms: (v, arg, ctx) => {
-    const taxonomy = arg === "tags" ? "tags" : "categories";
+    const taxonomy = arg ?? "categories";
+    const bucket =
+      taxonomy === "categories"
+        ? ctx.state.categories
+        : taxonomy === "tags"
+          ? ctx.state.tags
+          : (ctx.state.terms?.[taxonomy] ?? {});
     return toArray(v)
-      .map((id) => ctx.state[taxonomy][Number(id)]?.documentId)
+      .map((id) => bucket[Number(id)]?.documentId)
       .filter((id): id is string => typeof id === "string");
   },
   date: (v) => {
@@ -307,6 +321,36 @@ export function defaultEntryMapping(): FieldMapping[] {
       omitEmpty: true,
     },
     { target: "tags", source: "tags", transforms: ["terms:tags"], omitEmpty: true },
+  ];
+}
+
+/** The built-in mapping for authors. */
+export function defaultAuthorMapping(): FieldMapping[] {
+  return [
+    { target: "name", source: "name", transforms: ["decodeEntities", "trim"] },
+    { target: "slug", source: "slug" },
+    { target: "bio", source: "description", transforms: ["decodeEntities"], omitEmpty: true },
+    { target: "wpId", source: "id" },
+  ];
+}
+
+/** The built-in mapping for comments. The entry relation is attached by the migrator. */
+export function defaultCommentMapping(): FieldMapping[] {
+  return [
+    { target: "authorName", source: "author_name", transforms: ["decodeEntities", "trim"] },
+    { target: "content", source: "content.rendered" },
+    { target: "date", source: "date_gmt", transforms: ["date"] },
+    { target: "wpId", source: "id" },
+  ];
+}
+
+/** The built-in mapping for navigation menus. Items arrive as a JSON tree. */
+export function defaultMenuMapping(): FieldMapping[] {
+  return [
+    { target: "name", source: "name", transforms: ["decodeEntities", "trim"] },
+    { target: "slug", source: "slug" },
+    { target: "items", source: "$items" },
+    { target: "wpId", source: "id" },
   ];
 }
 

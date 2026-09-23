@@ -26,9 +26,14 @@ import {
 import { api, eventsUrl } from "../api";
 import pluginId from "../pluginId";
 
-type Kind = "media" | "categories" | "tags" | "posts" | "pages" | "custom";
+type Kind =
+  | "media" | "categories" | "tags" | "taxonomies" | "authors"
+  | "posts" | "pages" | "custom" | "comments" | "menus";
 
-const KINDS: Kind[] = ["media", "categories", "tags", "posts", "pages", "custom"];
+const KINDS: Kind[] = [
+  "media", "categories", "tags", "taxonomies", "authors",
+  "posts", "pages", "custom", "comments", "menus",
+];
 
 interface Settings {
   wpBaseUrl: string;

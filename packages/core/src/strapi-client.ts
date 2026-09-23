@@ -130,6 +130,13 @@ export class StrapiClient {
     }, this.retry);
   }
 
+  /** A single type lives at its singular route; everything else at the plural one. */
+  singleUrl(uid: string, override?: string): string {
+    const parts = uid.trim().split(".");
+    const last = (parts[parts.length - 1] ?? uid).trim();
+    return `/api/${(override || last).trim().replace(/^\/+|\/+$/g, "")}`;
+  }
+
   /** Derive the plural REST path from an API UID like `api::post.post`. */
   private pluralPath(uid: string): string {
     const parts = uid.trim().split(".");
@@ -324,9 +331,13 @@ export class StrapiClient {
     pluralOverride?: string,
     options?: WriteOptions,
   ): Promise<StrapiEntry> {
+    // A single type has no collection to POST into: PUT on its own route creates or replaces.
+    const url = options?.single
+      ? this.singleUrl(uid, pluralOverride)
+      : this.collectionUrl(uid, pluralOverride);
     const resp = await this.json<{ data: StrapiEntry }>(
-      "POST",
-      `${this.collectionUrl(uid, pluralOverride)}${statusQuery(options)}`,
+      options?.single ? "PUT" : "POST",
+      `${url}${statusQuery(options)}`,
       { data },
     );
     return resp.data;
@@ -339,11 +350,12 @@ export class StrapiClient {
     pluralOverride?: string,
     options?: WriteOptions,
   ): Promise<StrapiEntry> {
-    const resp = await this.json<{ data: StrapiEntry }>(
-      "PUT",
-      `${this.collectionUrl(uid, pluralOverride)}/${documentId}${statusQuery(options)}`,
-      { data },
-    );
+    const url = options?.single
+      ? this.singleUrl(uid, pluralOverride)
+      : `${this.collectionUrl(uid, pluralOverride)}/${documentId}`;
+    const resp = await this.json<{ data: StrapiEntry }>("PUT", `${url}${statusQuery(options)}`, {
+      data,
+    });
     return resp.data;
   }
 

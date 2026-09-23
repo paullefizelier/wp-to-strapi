@@ -80,9 +80,13 @@ const kindOptions: Array<{ value: Kind; label: string; icon: string }> = [
   { value: "media", label: "Médias", icon: "i-lucide-image" },
   { value: "categories", label: "Catégories", icon: "i-lucide-folder-tree" },
   { value: "tags", label: "Étiquettes", icon: "i-lucide-tags" },
+  { value: "taxonomies", label: "Taxonomies", icon: "i-lucide-library" },
+  { value: "authors", label: "Auteurs", icon: "i-lucide-users" },
   { value: "posts", label: "Articles", icon: "i-lucide-newspaper" },
   { value: "pages", label: "Pages", icon: "i-lucide-file-text" },
   { value: "custom", label: "Types personnalisés", icon: "i-lucide-shapes" },
+  { value: "comments", label: "Commentaires", icon: "i-lucide-message-square" },
+  { value: "menus", label: "Menus", icon: "i-lucide-menu" },
 ];
 
 /** Inline validation: a red field beats a failed run three minutes later. */

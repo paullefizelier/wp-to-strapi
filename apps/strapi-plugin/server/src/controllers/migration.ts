@@ -42,7 +42,10 @@ export default ({ strapi }: { strapi: Core.Strapi }) => {
       conflict?: (msg: string) => never;
     }) {
       const body = ctx.request.body ?? {};
-      const kinds: Kind[] = ["media", "categories", "tags", "posts", "pages", "custom"];
+      const kinds: Kind[] = [
+        "media", "categories", "tags", "taxonomies", "authors",
+        "posts", "pages", "custom", "comments", "menus",
+      ];
       const only = (body.only ?? []).filter((k): k is Kind => kinds.includes(k as Kind));
       if (body.only && only.length === 0) {
         ctx.badRequest(`only must include at least one of ${kinds.join("/")}`);
