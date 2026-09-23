@@ -1,4 +1,5 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { access, constants, readFile, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 /** A responsive variant Strapi generated for an uploaded image. */
 export interface MediaFormat {
@@ -53,7 +54,33 @@ export class StateStore {
   /** Serializes writes so a save started earlier can never clobber a later one. */
   private chain: Promise<void> = Promise.resolve();
 
-  constructor(private readonly path: string) {}
+  /**
+   * A read-only store (dry runs) keeps every change in memory — so the end-of-run report still
+   * lists failures — but never touches the file: a rehearsal must leave no trace.
+   */
+  constructor(
+    private readonly path: string,
+    private readonly opts: { readOnly?: boolean } = {},
+  ) {}
+
+  /**
+   * Fail before anything is migrated when the state file can't be written: losing it mid-run
+   * would make the next run duplicate every entry already sent to Strapi.
+   */
+  async assertWritable(): Promise<void> {
+    if (this.opts.readOnly) return;
+    try {
+      await access(this.path, constants.W_OK);
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      if (e.code !== "ENOENT") throw stateFileError(this.path, e);
+      try {
+        await access(dirname(this.path), constants.W_OK);
+      } catch (dirErr) {
+        throw stateFileError(this.path, dirErr as NodeJS.ErrnoException);
+      }
+    }
+  }
 
   async load(): Promise<void> {
     try {
@@ -152,7 +179,7 @@ export class StateStore {
    * callers collapse into the next write, and that write always serializes the latest state.
    */
   async persist(): Promise<void> {
-    if (!this.dirty) return this.chain;
+    if (this.opts.readOnly || !this.dirty) return this.chain;
     this.chain = this.chain.then(() => this.write());
     return this.chain;
   }
@@ -164,7 +191,18 @@ export class StateStore {
       await writeFile(this.path, JSON.stringify(this.state, null, 2), "utf8");
     } catch (err) {
       this.dirty = true;
-      throw err;
+      throw stateFileError(this.path, err as NodeJS.ErrnoException);
     }
   }
+}
+
+function stateFileError(path: string, err: NodeJS.ErrnoException): Error {
+  const readOnlyFs = err.code === "EROFS";
+  return new Error(
+    `Cannot write the state file "${path}" (${err.code ?? err.message}).` +
+      (readOnlyFs
+        ? " The filesystem is read-only (serverless hosting such as Vercel):" +
+          " run the migration where it can write, e.g. locally."
+        : " Choose a path the process can write to."),
+  );
 }

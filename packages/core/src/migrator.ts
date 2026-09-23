@@ -62,6 +62,26 @@ function pathOf(link: string | undefined): string {
   }
 }
 
+/**
+ * The name the file gets in Strapi: WordPress URLs percent-encode accents (`actualite%CC%81s`),
+ * and a few attachments (oEmbed captures, some plugins) have no extension at all.
+ */
+export function mediaFileName(m: Pick<WpMedia, "source_url" | "mime_type">): string {
+  const raw = basename(new URL(m.source_url).pathname);
+  let name: string;
+  try {
+    name = decodeURIComponent(raw).normalize("NFC");
+  } catch {
+    name = raw;
+  }
+  if (!/\.[a-z0-9]{2,5}$/i.test(name)) {
+    const subtype = m.mime_type?.split("/")[1]?.split(/[+;]/)[0];
+    const ext = subtype === "jpeg" ? "jpg" : subtype;
+    if (ext && /^[a-z0-9]{2,5}$/i.test(ext)) name = `${name}.${ext}`;
+  }
+  return name;
+}
+
 /** Keep the responsive variants Strapi generated so `srcset` can be rebuilt on the way out. */
 function toMediaFormats(file: StrapiUploadFile): MediaFormat[] {
   return Object.values(file.formats ?? {})
@@ -188,7 +208,7 @@ export class Migrator extends EventEmitter {
         retries: cfg.retries,
         onRetry: (attempt, delayMs, reason) => this.reportRetry("Strapi", attempt, delayMs, reason),
       });
-    this.state = new StateStore(cfg.stateFile);
+    this.state = new StateStore(cfg.stateFile, { readOnly: cfg.dryRun });
     this.limit = pLimit(cfg.concurrency);
   }
 
@@ -381,6 +401,7 @@ export class Migrator extends EventEmitter {
   async run(opts: MigrateOptions = {}): Promise<void> {
     this.assertMappingValid();
     await this.state.load();
+    await this.state.assertWritable();
     await this.resolveRoutes();
     this.routeCounts = new Map();
     this.retryFailed = opts.retryFailed === true;
@@ -1084,17 +1105,20 @@ export class Migrator extends EventEmitter {
     }
 
     try {
-      const { buffer, contentType } = await this.wp.fetchBinary(m.source_url);
-      const fileName = basename(new URL(m.source_url).pathname);
+      const fileName = mediaFileName(m);
       if (this.cfg.dryRun) {
+        // Check the file is reachable without downloading it: a site's videos alone can weigh GBs.
+        const { size } = await this.wp.checkBinary(m.source_url);
+        const known = size ?? m.media_details?.filesize;
         this.fire({
           type: "item-ok",
           kind: "media",
           wpId: m.id,
-          detail: `[dry-run] ${fileName} (${buffer.length}B)`,
+          detail: `[dry-run] ${fileName}${known !== undefined ? ` (${known}B)` : ""}`,
         });
         return;
       }
+      const { buffer, contentType } = await this.wp.fetchBinary(m.source_url);
       const uploaded = await this.strapi.uploadFile({
         buffer,
         fileName,

@@ -373,6 +373,33 @@ export class WordPressClient {
     }, this.retry);
   }
 
+  /**
+   * Check a file is reachable without downloading it (dry runs). Servers that refuse HEAD are
+   * given the benefit of the doubt: the real run will download the file anyway.
+   */
+  async checkBinary(url: string): Promise<{ size?: number }> {
+    return withRetry(async () => {
+      const res = await request(url, {
+        method: "HEAD",
+        maxRedirections: 5,
+        headers: this.authHeader
+          ? { Authorization: this.authHeader, "User-Agent": "wp-to-strapi/0.1" }
+          : { "User-Agent": "wp-to-strapi/0.1" },
+      });
+      await res.body.dump();
+      if (res.statusCode === 405 || res.statusCode === 501) return {};
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        throw new HttpStatusError(
+          `Download ${url} failed: ${res.statusCode}`,
+          res.statusCode,
+          parseRetryAfter(res.headers["retry-after"]),
+        );
+      }
+      const length = Number(res.headers["content-length"]);
+      return Number.isFinite(length) && length > 0 ? { size: length } : {};
+    }, this.retry);
+  }
+
   async fetchBinary(
     url: string,
   ): Promise<{ buffer: Buffer; contentType: string }> {

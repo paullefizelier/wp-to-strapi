@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildConfig } from "./config.js";
 import { describeNotice, NOTICE_CODES } from "./notices.js";
-import { Migrator, type MigratorEvent } from "./migrator.js";
+import { mediaFileName, Migrator, type MigratorEvent } from "./migrator.js";
 import type { StrapiAdapter } from "./strapi-adapter.js";
 import type { MigrationState } from "./state.js";
 import type { WordPressClient } from "./wordpress-client.js";
@@ -144,7 +144,8 @@ function fakeWp(over: Partial<Record<string, unknown>> = {}) {
       ]),
     count: async (restBase: string) =>
       ({ media: 1, categories: 1, tags: 1, posts: 2, pages: 1, portfolio: 1, users: 1, comments: 2, menus: 1, genre: 1 })[restBase] ?? 0,
-    fetchBinary: async () => ({ buffer: Buffer.from("jpeg-bytes"), contentType: "image/jpeg" }),
+    fetchBinary: vi.fn(async () => ({ buffer: Buffer.from("jpeg-bytes"), contentType: "image/jpeg" })),
+    checkBinary: vi.fn(async () => ({ size: 10 })),
     fetchPage: vi.fn(async () =>
       `<html><body><div class="entry-content"><h2>Recovered</h2><p>${"body ".repeat(60)}</p>` +
       `<img src="/wp-content/uploads/2024/05/photo.jpg" alt="p"></div></body></html>`,
@@ -787,5 +788,95 @@ describe("Routing posts by category", () => {
       [4, "blog", "api::blog.blog"],
     ]);
     expect(strapi.created).toEqual([]);
+  });
+});
+
+describe("Dry runs and the state file", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function config(stateFile: string, over: Record<string, unknown> = {}) {
+    return buildConfig({
+      wp: { baseUrl: WP },
+      strapi: { baseUrl: "https://cms.example.com", token: "t" },
+      stateFile,
+      concurrency: 1,
+      ...over,
+    });
+  }
+
+  it("a dry run never writes the state file, even when an entry fails", async () => {
+    const stateFile = join(dir, "state.json");
+    const failing = { ...MEDIA, id: 8, source_url: `${WP}/wp-content/uploads/missing.jpg` };
+    const wp = fakeWp({
+      media: () => stream([MEDIA, failing]),
+      checkBinary: vi.fn(async (url: string) => {
+        if (url.includes("missing")) throw new Error("Download failed: 404");
+        return { size: 10 };
+      }),
+    });
+    const events: MigratorEvent[] = [];
+    const migrator = new Migrator(config(stateFile, { dryRun: true }), {
+      strapi: fakeStrapi().adapter,
+      wp: wp.wp,
+    });
+    migrator.on("event", (e) => events.push(e));
+    await migrator.run({ only: ["media"] });
+
+    await expect(access(stateFile)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(events.filter((e) => e.type === "item-error")).toHaveLength(1);
+    // The failure is still reported at the end of the rehearsal.
+    const end = events.find((e) => e.type === "run-end");
+    expect(end && "failures" in end ? end.failures : []).toHaveLength(1);
+  });
+
+  it("a dry run checks media without downloading them", async () => {
+    const wp = fakeWp();
+    const migrator = new Migrator(config(join(dir, "state.json"), { dryRun: true }), {
+      strapi: fakeStrapi().adapter,
+      wp: wp.wp,
+    });
+    await migrator.run({ only: ["media"] });
+    expect(wp.raw.checkBinary).toHaveBeenCalledTimes(1);
+    expect(wp.raw.fetchBinary).not.toHaveBeenCalled();
+  });
+
+  it("a real run stops before touching Strapi when the state file can't be written", async () => {
+    const strapi = fakeStrapi();
+    const upload = vi.spyOn(strapi.adapter, "uploadFile");
+    const migrator = new Migrator(config(join(dir, "no-such-dir", "state.json")), {
+      strapi: strapi.adapter,
+      wp: fakeWp().wp,
+    });
+    await expect(migrator.run()).rejects.toThrow(/Cannot write the state file/);
+    expect(upload).not.toHaveBeenCalled();
+  });
+});
+
+describe("mediaFileName", () => {
+  it("decodes percent-encoded accents", () => {
+    expect(
+      mediaFileName({
+        source_url: `${WP}/wp-content/uploads/photo-actualite%CC%81s-chantier-scaled.jpg`,
+        mime_type: "image/jpeg",
+      }),
+    ).toBe("photo-actualités-chantier-scaled.jpg");
+  });
+
+  it("adds an extension from the MIME type when the URL has none", () => {
+    expect(mediaFileName({ source_url: `${WP}/wp-content/uploads/watch`, mime_type: "video/mp4" })).toBe(
+      "watch.mp4",
+    );
+    expect(mediaFileName({ source_url: `${WP}/u/cover`, mime_type: "image/jpeg" })).toBe("cover.jpg");
+  });
+
+  it("keeps a name that is already fine, or not decodable", () => {
+    expect(mediaFileName({ source_url: `${WP}/u/logo.png`, mime_type: "image/png" })).toBe("logo.png");
+    expect(mediaFileName({ source_url: `${WP}/u/bad%E0.png`, mime_type: "image/png" })).toBe("bad%E0.png");
   });
 });
