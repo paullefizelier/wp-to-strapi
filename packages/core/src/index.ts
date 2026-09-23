@@ -1,5 +1,13 @@
 export { buildConfig, defaults, DRAFT_STATUSES } from "./config.js";
-export type { AppConfig, WpConfig, StrapiConfig, CustomTypeConfig } from "./config.js";
+export type {
+  AppConfig,
+  WpConfig,
+  StrapiConfig,
+  CustomTypeConfig,
+  RouteConfig,
+  RoutingConfig,
+  TaxonomyConfig,
+} from "./config.js";
 export { WordPressClient } from "./wordpress-client.js";
 export { StrapiClient } from "./strapi-client.js";
 export type { StrapiAdapter, WriteOptions } from "./strapi-adapter.js";

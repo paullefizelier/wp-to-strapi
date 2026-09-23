@@ -46,6 +46,7 @@ interface Settings {
   customTypes: string[];
   htmlFallback: boolean;
   mapping: string;
+  routing: string;
   pageUid: string;
   concurrency: number;
   pageSize: number;
@@ -72,6 +73,7 @@ const emptySettings: Settings = {
   customTypes: [],
   htmlFallback: true,
   mapping: "",
+  routing: "",
   pageUid: "api::page.page",
   concurrency: 4,
   pageSize: 100,
@@ -544,6 +546,34 @@ const HomePage = () => {
                   border: `1px solid ${mappingState.ok ? "#dcdce4" : "#d02b20"}`,
                 }}
               />
+            </Box>
+            <Box paddingTop={3}>
+              <Typography variant="pi" fontWeight="bold">
+                Routing by category
+              </Typography>
+              <Box paddingTop={1}>
+                <Typography variant="pi" textColor="neutral600">
+                  Send some posts to another content-type:{" "}
+                  <code>{'[{ "name": "blog", "categories": ["News"], "uid": "api::blog.blog" }]'}</code>.
+                  Each route's mapping goes under <code>route.&lt;name&gt;</code> above.
+                </Typography>
+              </Box>
+              <Box paddingTop={2}>
+                <textarea
+                  value={settings.routing}
+                  spellCheck={false}
+                  rows={5}
+                  onChange={(e) => setSettings((s) => ({ ...s, routing: e.target.value }))}
+                  style={{
+                    width: "100%",
+                    fontFamily: "ui-monospace, SFMono-Regular, monospace",
+                    fontSize: 12,
+                    padding: 12,
+                    borderRadius: 4,
+                    border: "1px solid #dcdce4",
+                  }}
+                />
+              </Box>
             </Box>
             {!mappingState.ok && (
               <Box paddingTop={2}>

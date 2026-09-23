@@ -52,6 +52,33 @@ export interface StrapiConfig {
   commentEntryField: string;
 }
 
+/**
+ * Send part of a WordPress listing to its own Strapi content-type.
+ *
+ * `Actualités` posts to `api::blog.blog`, `Communiqués de presse` to `api::press.press`: each
+ * route picks entries by category or tag and has its own mapping, under `mapping.route[name]`.
+ */
+export interface RouteConfig {
+  /** Keys the route's mapping and its state bucket. Keep it stable across runs. */
+  name: string;
+  /** Listing the route takes entries from. */
+  from?: "posts" | "pages";
+  /** Categories by name, slug or id. An entry matches if it has any of them. */
+  categories?: Array<string | number>;
+  /** Same, for tags. Combined with `categories` as an OR. */
+  tags?: Array<string | number>;
+  /** Target Strapi UID. */
+  uid: string;
+  pluralPath?: string;
+}
+
+export interface RoutingConfig {
+  /** Evaluated in order; the first route that matches takes the entry. */
+  routes: RouteConfig[];
+  /** What happens to an entry no route takes: the default content-type, or nothing. */
+  unmatched: "default" | "skip";
+}
+
 /** A WordPress taxonomy beyond categories and tags. */
 export interface TaxonomyConfig {
   /** REST base under /wp/v2 — `genre` for /wp-json/wp/v2/genre. */
@@ -101,6 +128,8 @@ export interface AppConfig {
   customTypes: CustomTypeConfig[];
   /** Custom taxonomies to migrate; attach them with the `terms:<restBase>` transform. */
   taxonomies: TaxonomyConfig[];
+  /** Route posts and pages to different content-types by category or tag. */
+  routing: RoutingConfig;
   /**
    * Where to write the old-URL → new-entry table. Unset means no file, but the redirects are
    * still recorded in the state.
@@ -145,6 +174,7 @@ export function buildConfig(input: {
   retries?: number;
   customTypes?: CustomTypeConfig[];
   taxonomies?: TaxonomyConfig[];
+  routing?: Partial<RoutingConfig>;
   redirectsFile?: string;
   mapping?: MappingSet;
 }): AppConfig {
@@ -188,6 +218,10 @@ export function buildConfig(input: {
     retries: input.retries ?? defaults.retries,
     customTypes: input.customTypes ? [...input.customTypes] : [],
     taxonomies: input.taxonomies ? [...input.taxonomies] : [],
+    routing: {
+      routes: input.routing?.routes ? [...input.routing.routes] : [],
+      unmatched: input.routing?.unmatched ?? "default",
+    },
     redirectsFile: input.redirectsFile,
     mapping: input.mapping ?? {},
   };

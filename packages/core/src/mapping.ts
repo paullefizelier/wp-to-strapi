@@ -36,6 +36,8 @@ export interface MappingSet {
   menu?: FieldMapping[];
   /** Keyed by the taxonomy's REST base; falls back to the term mapping. */
   taxonomy?: Record<string, FieldMapping[]>;
+  /** Keyed by route name; falls back to `post` (or `page` for a route from pages). */
+  route?: Record<string, FieldMapping[]>;
   /** Keyed by the custom type's REST base. Falls back to `post` when absent. */
   custom?: Record<string, FieldMapping[]>;
 }

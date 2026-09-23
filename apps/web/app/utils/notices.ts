@@ -51,6 +51,10 @@ const FR: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
     `${p.count} redirection(s) enregistrée(s)${p.file ? ` et écrite(s) dans ${p.file}` : ""}.`,
   "redirects.writeFailed": (p) =>
     `Impossible d'écrire la table de redirections dans ${p.file} : ${p.error}`,
+  "routing.unknownTerm": (p) =>
+    `Route « ${p.route} » : ${p.taxonomy === "tags" ? "l'étiquette" : "la catégorie"} ` +
+    `« ${p.term} » n'existe pas dans WordPress (connues : ${p.available}).`,
+  "routing.summary": (p) => `Routage : ${p.counts}.`,
   "failures.hint": () =>
     "Relancez avec « Relancer uniquement ces entrées » pour ne reprendre que celles-là.",
 };

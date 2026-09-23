@@ -18,6 +18,8 @@ export interface StoredSettings {
   htmlFallback: boolean;
   /** Field mapping as JSON text, edited in the admin panel. Empty means the built-in mapping. */
   mapping: string;
+  /** Routing as JSON text: `{ routes, unmatched }` or a bare array of routes. */
+  routing: string;
 }
 
 const DEFAULTS: StoredSettings = {
@@ -34,6 +36,7 @@ const DEFAULTS: StoredSettings = {
   customTypes: [],
   htmlFallback: true,
   mapping: "",
+  routing: "",
 };
 
 /**

@@ -472,7 +472,10 @@ async function startMigration() {
 
       <!-- 3 · Mapping -->
       <template #mapping>
-        <FieldMapper class="mt-6" />
+        <div class="mt-6 space-y-4">
+          <RoutingEditor :content-types="contentTypes" />
+          <FieldMapper />
+        </div>
       </template>
 
       <!-- 4 · Portée et lancement -->

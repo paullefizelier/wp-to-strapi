@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import pLimit from "p-limit";
-import type { AppConfig, CustomTypeConfig } from "./config.js";
+import type { AppConfig, CustomTypeConfig, RouteConfig } from "./config.js";
 import { extractReadableContent } from "./content-extract.js";
 import {
   decodeEntities,
@@ -38,6 +38,19 @@ import type {
   WpUser,
 } from "./types.js";
 import { WordPressClient } from "./wordpress-client.js";
+
+/**
+ * Compare category names the way people type them: "Communiqués de presse", "communiques de
+ * presse" and the slug "communiques-de-presse" are the same category.
+ */
+function normaliseTerm(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
 
 /** The path part of a WordPress permalink — what a redirect rule matches on. */
 function pathOf(link: string | undefined): string {
@@ -117,6 +130,8 @@ export interface PreviewItem {
   slug: string;
   /** Strapi content-type the payload would go to. */
   uid: string;
+  /** The route that took the entry, when routing sent it somewhere specific. */
+  route?: string;
   data: Record<string, unknown>;
   notices: Notice[];
 }
@@ -148,6 +163,10 @@ export class Migrator extends EventEmitter {
   private retryFailed = false;
   /** Whether this run has a media map to rewrite against. */
   private mediaMigrated = false;
+  /** Each route with its categories and tags resolved to WordPress ids. */
+  private resolvedRoutes: Array<{ route: RouteConfig; categories: Set<number>; tags: Set<number> }> = [];
+  /** How many entries each route took this run, for the summary. */
+  private routeCounts = new Map<string, number>();
 
   constructor(private readonly cfg: AppConfig, deps: MigratorDeps = {}) {
     super();
@@ -200,11 +219,89 @@ export class Migrator extends EventEmitter {
   private mappingFor(
     kind: "post" | "page" | "category" | "tag",
     restBase?: string,
+    routeName?: string,
   ): FieldMapping[] {
     const set = this.cfg.mapping ?? {};
     const isTerm = kind === "category" || kind === "tag";
-    const configured = restBase ? (set.custom?.[restBase] ?? set.post) : set[kind];
+    const configured = routeName
+      ? (set.route?.[routeName] ?? set[kind])
+      : restBase
+        ? (set.custom?.[restBase] ?? set.post)
+        : set[kind];
     return mergeMappings(set.common, configured ?? (isTerm ? defaultTermMapping() : defaultEntryMapping()));
+  }
+
+  /**
+   * Resolve every route's categories and tags to WordPress ids, once, before anything is
+   * written. A name that matches nothing stops the run: an article silently sent to the wrong
+   * content-type is far harder to undo than a run that did not start.
+   */
+  private async resolveRoutes(): Promise<void> {
+    const routes = this.cfg.routing.routes;
+    this.resolvedRoutes = [];
+    if (routes.length === 0) return;
+
+    const needs = (key: "categories" | "tags") => routes.some((r) => (r[key] ?? []).length > 0);
+    const lookup = async (taxonomy: "categories" | "tags") => {
+      const byKey = new Map<string, number>();
+      const labels: string[] = [];
+      for await (const term of this.wp.terms(taxonomy)) {
+        byKey.set(String(term.id), term.id);
+        byKey.set(normaliseTerm(term.slug), term.id);
+        byKey.set(normaliseTerm(decodeEntities(term.name ?? "")), term.id);
+        labels.push(decodeEntities(term.name ?? term.slug));
+      }
+      return { byKey, labels };
+    };
+    const categories = needs("categories") ? await lookup("categories") : undefined;
+    const tags = needs("tags") ? await lookup("tags") : undefined;
+
+    const problems: string[] = [];
+    const resolve = (route: RouteConfig, taxonomy: "categories" | "tags") => {
+      const table = taxonomy === "categories" ? categories : tags;
+      const ids = new Set<number>();
+      for (const wanted of route[taxonomy] ?? []) {
+        const id = table?.byKey.get(normaliseTerm(String(wanted)));
+        if (id === undefined) {
+          const n = notice(
+            "routing.unknownTerm",
+            {
+              route: route.name,
+              taxonomy,
+              term: String(wanted),
+              available: (table?.labels ?? []).slice(0, 12).join(", ") || "—",
+            },
+            "error",
+          );
+          this.say(n);
+          problems.push(n.message);
+        } else ids.add(id);
+      }
+      return ids;
+    };
+
+    for (const route of routes) {
+      this.resolvedRoutes.push({
+        route,
+        categories: resolve(route, "categories"),
+        tags: resolve(route, "tags"),
+      });
+    }
+    if (problems.length > 0) throw new Error(`Invalid routing: ${problems.join("; ")}`);
+  }
+
+  /** The first route that takes this entry, if any. */
+  private routeFor(entry: WpPost | WpPage, from: "posts" | "pages"): RouteConfig | undefined {
+    for (const { route, categories, tags } of this.resolvedRoutes) {
+      if ((route.from ?? "posts") !== from) continue;
+      if ((entry.categories ?? []).some((id) => categories.has(id))) return route;
+      if ((entry.tags ?? []).some((id) => tags.has(id))) return route;
+    }
+    return undefined;
+  }
+
+  private countRoute(name: string): void {
+    this.routeCounts.set(name, (this.routeCounts.get(name) ?? 0) + 1);
   }
 
   /** Fail on a broken mapping before writing anything, not entry by entry. */
@@ -233,6 +330,22 @@ export class Migrator extends EventEmitter {
         (t) => ["post", t.restBase] as ["post", string],
       ),
     ];
+    for (const route of this.cfg.routing.routes) {
+      if (!route.uid) problems.push(`route "${route.name}": no Strapi content-type`);
+      if (!route.name) problems.push("a route has no name");
+      const rows = this.mappingFor(route.from === "pages" ? "page" : "post", undefined, route.name);
+      if (!rows.some((row) => row.target === this.cfg.strapi.correlationField)) {
+        problems.push(
+          `route "${route.name}": the mapping never writes "${this.cfg.strapi.correlationField}", ` +
+            `so re-running would create duplicates instead of updating.`,
+        );
+      }
+    }
+    for (const [name, rows] of Object.entries(this.cfg.mapping?.route ?? {})) {
+      for (const issue of validateMapping(rows)) {
+        problems.push(`route.${name}.${issue.target || "?"}: ${issue.message}`);
+      }
+    }
     for (const [kind, restBase] of kinds) {
       if (kind === "category" && !this.cfg.strapi.categoryUid) continue;
       if (kind === "tag" && !this.cfg.strapi.tagUid) continue;
@@ -268,6 +381,8 @@ export class Migrator extends EventEmitter {
   async run(opts: MigrateOptions = {}): Promise<void> {
     this.assertMappingValid();
     await this.state.load();
+    await this.resolveRoutes();
+    this.routeCounts = new Map();
     this.retryFailed = opts.retryFailed === true;
     if (this.retryFailed) {
       const pending = this.state.allFailures().length;
@@ -324,6 +439,10 @@ export class Migrator extends EventEmitter {
     if (kinds.includes("comments")) await this.migrateComments();
     if (kinds.includes("menus")) await this.migrateMenus();
     await this.writeRedirects();
+    if (this.routeCounts.size > 0) {
+      const counts = [...this.routeCounts.entries()].map(([name, n]) => `${n} → ${name}`).join(", ");
+      this.say(notice("routing.summary", { counts }, "info"));
+    }
 
     await this.state.persist();
     const failures = this.state.allFailures();
@@ -511,14 +630,10 @@ export class Migrator extends EventEmitter {
 
   private async migrateOneCustom(p: WpPost, type: CustomTypeConfig): Promise<void> {
     try {
-      const { documentId } = await this.upsertEntry(
-        type.uid,
-        p,
-        type.pluralPath,
-        "post",
-        type.restBase,
-        type.single === true,
-      );
+      const { documentId } = await this.upsertEntry(type.uid, p, type.pluralPath, {
+        restBase: type.restBase,
+        single: type.single === true,
+      });
       this.state.setCustom(type.restBase, p.id, documentId);
       this.state.addRedirect(pathOf(p.link), p.slug, type.restBase, documentId);
       this.state.clearFailure(`custom:${type.restBase}`, p.id);
@@ -546,6 +661,7 @@ export class Migrator extends EventEmitter {
   async preview(opts: PreviewOptions = {}): Promise<PreviewItem[]> {
     this.assertMappingValid();
     await this.state.load();
+    await this.resolveRoutes();
     const limit = Math.max(1, opts.limit ?? 3);
     const kind = opts.kind ?? "posts";
     const items: PreviewItem[] = [];
@@ -582,19 +698,26 @@ export class Migrator extends EventEmitter {
         : custom
           ? this.wp.customType(custom.restBase, this.cfg.statuses)
           : this.wp.posts(this.cfg.statuses);
-    const uid = kind === "pages"
+    const defaultUid = kind === "pages"
       ? this.cfg.strapi.pageUid
       : (custom?.uid ?? this.cfg.strapi.postUid);
 
     for await (const entry of source) {
+      // Show where each entry would land, so a routing mistake is visible before any write.
+      const route = custom ? undefined : this.routeFor(entry, kind === "pages" ? "pages" : "posts");
+      const skipped =
+        !custom && !route && this.resolvedRoutes.length > 0 && this.cfg.routing.unmatched === "skip";
+      if (skipped) continue;
       const built = await this.buildEntryData(
         entry,
         kind === "pages" ? "page" : "post",
         custom?.restBase,
+        route?.name,
       );
       items.push({
         kind: kind === "custom" ? "custom" : kind,
-        uid,
+        uid: route?.uid ?? defaultUid,
+        route: route?.name,
         wpId: entry.id,
         slug: entry.slug,
         data: built.data,
@@ -1085,10 +1208,11 @@ export class Migrator extends EventEmitter {
     p: WpPost | WpPage,
     kind: "post" | "page",
     restBase?: string,
+    routeName?: string,
   ): Promise<{ data: Record<string, unknown>; notices: Notice[] }> {
     const resolved = await this.resolveContent(p);
     const state = this.state.get();
-    const mapped = applyMapping(p, this.mappingFor(kind, restBase), {
+    const mapped = applyMapping(p, this.mappingFor(kind, restBase, routeName), {
       state,
       strapiBaseUrl: this.cfg.strapi.baseUrl,
       virtuals: {
@@ -1170,11 +1294,15 @@ export class Migrator extends EventEmitter {
     uid: string,
     p: WpPost | WpPage,
     pluralOverride?: string,
-    kind: "post" | "page" = "post",
-    restBase?: string,
-    single = false,
+    opts: {
+      kind?: "post" | "page";
+      restBase?: string;
+      single?: boolean;
+      routeName?: string;
+    } = {},
   ): Promise<{ documentId: string }> {
-    const { data, notices } = await this.buildEntryData(p, kind, restBase);
+    const { kind = "post", restBase, single = false, routeName } = opts;
+    const { data, notices } = await this.buildEntryData(p, kind, restBase, routeName);
     for (const n of notices) this.say(n);
     if (this.cfg.dryRun) {
       return { documentId: "dry-run" };
@@ -1211,51 +1339,57 @@ export class Migrator extends EventEmitter {
   }
 
   private async migrateOnePost(p: WpPost): Promise<void> {
-    try {
-      const { documentId } = await this.upsertEntry(
-        this.cfg.strapi.postUid,
-        p,
-        this.cfg.strapi.postPluralPath,
-      );
-      this.state.setPost(p.id, documentId);
-      this.state.addRedirect(pathOf(p.link), p.slug, "posts", documentId);
-      this.state.clearFailure("posts", p.id);
-      await this.state.persist();
-      this.fire({ type: "item-ok", kind: "posts", wpId: p.id, detail: `${p.slug} → ${documentId}` });
-    } catch (err) {
-      this.state.recordFailure("posts", p.id, (err as Error).message);
-      await this.state.persist();
-      this.fire({
-        type: "item-error",
-        kind: "posts",
-        wpId: p.id,
-        message: (err as Error).message,
-      });
-    }
+    await this.migrateRoutedEntry(p, "posts");
   }
 
   private async migrateOnePage(p: WpPage): Promise<void> {
+    await this.migrateRoutedEntry(p, "pages");
+  }
+
+  /**
+   * Write a post or a page wherever its route sends it — the default content-type when no
+   * route takes it, unless routing says to skip those.
+   *
+   * A routed entry is still recorded under `posts`/`pages` too: comments, menus and retries
+   * look entries up there, and should not have to know about routing.
+   */
+  private async migrateRoutedEntry(p: WpPost | WpPage, from: "posts" | "pages"): Promise<void> {
+    const route = this.routeFor(p, from);
+    if (!route && this.resolvedRoutes.length > 0 && this.cfg.routing.unmatched === "skip") {
+      this.fire({ type: "item-skip", kind: from, wpId: p.id, reason: "no route matches" });
+      return;
+    }
+
+    const target = route
+      ? { uid: route.uid, plural: route.pluralPath }
+      : from === "posts"
+        ? { uid: this.cfg.strapi.postUid, plural: this.cfg.strapi.postPluralPath }
+        : { uid: this.cfg.strapi.pageUid, plural: this.cfg.strapi.pagePluralPath };
+
     try {
-      const { documentId } = await this.upsertEntry(
-        this.cfg.strapi.pageUid,
-        p,
-        this.cfg.strapi.pagePluralPath,
-        "page",
-      );
-      this.state.setPage(p.id, documentId);
-      this.state.addRedirect(pathOf(p.link), p.slug, "pages", documentId);
-      this.state.clearFailure("pages", p.id);
-      await this.state.persist();
-      this.fire({ type: "item-ok", kind: "pages", wpId: p.id, detail: `${p.slug} → ${documentId}` });
-    } catch (err) {
-      this.state.recordFailure("pages", p.id, (err as Error).message);
+      const { documentId } = await this.upsertEntry(target.uid, p, target.plural, {
+        kind: from === "posts" ? "post" : "page",
+        routeName: route?.name,
+      });
+      if (from === "posts") this.state.setPost(p.id, documentId);
+      else this.state.setPage(p.id, documentId);
+      if (route) {
+        this.state.setCustom(`route:${route.name}`, p.id, documentId);
+        this.countRoute(route.name);
+      }
+      this.state.addRedirect(pathOf(p.link), p.slug, route?.name ?? from, documentId);
+      this.state.clearFailure(from, p.id);
       await this.state.persist();
       this.fire({
-        type: "item-error",
-        kind: "pages",
+        type: "item-ok",
+        kind: from,
         wpId: p.id,
-        message: (err as Error).message,
+        detail: route ? `${p.slug} → [${route.name}] ${documentId}` : `${p.slug} → ${documentId}`,
       });
+    } catch (err) {
+      this.state.recordFailure(from, p.id, (err as Error).message);
+      await this.state.persist();
+      this.fire({ type: "item-error", kind: from, wpId: p.id, message: (err as Error).message });
     }
   }
 }

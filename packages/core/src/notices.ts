@@ -31,6 +31,8 @@ export const NOTICE_CODES = [
   "hierarchy.linked",
   "redirects.written",
   "redirects.writeFailed",
+  "routing.unknownTerm",
+  "routing.summary",
 ] as const;
 
 export type NoticeCode = (typeof NOTICE_CODES)[number];
@@ -58,6 +60,8 @@ export interface NoticeParamsByCode {
   "hierarchy.linked": { kind: string; count: number };
   "redirects.written": { count: number; file: string };
   "redirects.writeFailed": { file: string; error: string };
+  "routing.unknownTerm": { route: string; taxonomy: string; term: string; available: string };
+  "routing.summary": { counts: string };
 }
 
 export type NoticeParams<C extends NoticeCode = NoticeCode> = NoticeParamsByCode[C];
@@ -112,6 +116,10 @@ const EN: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
   "redirects.written": (p) =>
     `${p.count} redirect(s) recorded${p.file ? ` and written to ${p.file}` : ""}.`,
   "redirects.writeFailed": (p) => `Could not write the redirect table to ${p.file}: ${p.error}`,
+  "routing.unknownTerm": (p) =>
+    `route "${p.route}": ${p.taxonomy === "tags" ? "tag" : "category"} "${p.term}" does not exist ` +
+    `in WordPress (known: ${p.available})`,
+  "routing.summary": (p) => `Routing: ${p.counts}`,
   "failures.hint": () => "Re-run with retryFailed (CLI: --retry-failed) to retry just these.",
 };
 

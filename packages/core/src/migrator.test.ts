@@ -636,3 +636,156 @@ describe("Everything else a WordPress site holds", () => {
     expect(seen.some((s) => s.single === true)).toBe(true);
   });
 });
+
+describe("Routing posts by category", () => {
+  let dir: string;
+  let stateFile: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-routing-"));
+    stateFile = join(dir, "state.json");
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  // The user's case: "Actualités" → blog with a target group, "Communiqués de presse" → press.
+  const categories: WpTerm[] = [
+    { id: 11, name: "Actualit&eacute;s", slug: "actualites" },
+    { id: 12, name: "Communiqu&eacute;s de presse", slug: "communiques-de-presse" },
+    { id: 13, name: "Divers", slug: "divers" },
+  ];
+  const posts = [
+    wpPost({ id: 1, slug: "une-actu", categories: [11] }),
+    wpPost({ id: 2, slug: "un-communique", categories: [12] }),
+    wpPost({ id: 3, slug: "hors-route", categories: [13] }),
+    wpPost({ id: 4, slug: "les-deux", categories: [12, 11] }),
+  ];
+
+  function routingWp() {
+    const base = fakeWp();
+    return {
+      ...base.raw,
+      terms: (restBase: string) => stream<WpTerm>(restBase === "categories" ? categories : []),
+      posts: () => stream<WpPost>(posts),
+      pages: () => stream<WpPage>([]),
+    } as unknown as WordPressClient;
+  }
+
+  function routedConfig(over: Record<string, unknown> = {}) {
+    return buildConfig({
+      wp: { baseUrl: WP },
+      strapi: { baseUrl: "https://cms.example.com", token: "t" },
+      stateFile,
+      concurrency: 1,
+      routing: {
+        routes: [
+          // Names as a person types them — accents and capitals included.
+          { name: "blog", categories: ["Actualités"], uid: "api::blog.blog" },
+          { name: "presse", categories: ["communiques-de-presse"], uid: "api::press.press" },
+        ],
+      },
+      mapping: {
+        route: {
+          blog: [
+            { target: "titre", source: "title.rendered", transforms: ["decodeEntities"] },
+            { target: "targetGroup", value: "grand-public" },
+            { target: "wpId", source: "id" },
+          ],
+          presse: [
+            { target: "titre", source: "title.rendered", transforms: ["decodeEntities"] },
+            { target: "wpId", source: "id" },
+          ],
+        },
+      },
+      ...over,
+    });
+  }
+
+  async function runRouted(over: Record<string, unknown> = {}) {
+    const strapi = fakeStrapi();
+    const events: MigratorEvent[] = [];
+    const migrator = new Migrator(routedConfig(over), { strapi: strapi.adapter, wp: routingWp() });
+    migrator.on("event", (e) => events.push(e));
+    await migrator.run({ only: ["posts"] });
+    const state = JSON.parse(await readFile(stateFile, "utf8")) as MigrationState;
+    return { created: strapi.created, events, state };
+  }
+
+  it("sends each category to its own content-type with its own mapping", async () => {
+    const { created } = await runRouted();
+    const blog = created.filter((c) => c.uid === "api::blog.blog");
+    const press = created.filter((c) => c.uid === "api::press.press");
+    // Post 4 is in both categories and lands here too — see the next test.
+    expect(blog.map((c) => c.data.wpId)).toEqual([1, 4]);
+    expect(press.map((c) => c.data.wpId)).toEqual([2]);
+    expect(blog[0]?.data).toEqual({ titre: "Cafés & co", targetGroup: "grand-public", wpId: 1 });
+    // The press route has no target group: mappings are per route.
+    expect(press[0]?.data).not.toHaveProperty("targetGroup");
+  });
+
+  it("gives an entry in two routed categories to the first route listed", async () => {
+    const { created } = await runRouted();
+    // Post 4 is in both "Communiqués" and "Actualités"; "blog" comes first.
+    expect(created.find((c) => c.data.wpId === 4)?.uid).toBe("api::blog.blog");
+  });
+
+  it("sends unrouted entries to the default content-type, or skips them", async () => {
+    const byDefault = await runRouted();
+    expect(byDefault.created.find((c) => c.data.wpId === 3)?.uid).toBe("api::post.post");
+
+    const skipping = await runRouted({
+      routing: { ...routedConfig().routing, unmatched: "skip" },
+    });
+    expect(skipping.created.find((c) => c.data.wpId === 3)).toBeUndefined();
+    expect(
+      skipping.events.some((e) => e.type === "item-skip" && e.wpId === 3 && e.reason === "no route matches"),
+    ).toBe(true);
+  });
+
+  it("refuses to run when a route names a category WordPress does not have", async () => {
+    const strapi = fakeStrapi();
+    const migrator = new Migrator(
+      routedConfig({
+        routing: { routes: [{ name: "blog", categories: ["Actus"], uid: "api::blog.blog" }] },
+      }),
+      { strapi: strapi.adapter, wp: routingWp() },
+    );
+    await expect(migrator.run({ only: ["posts"] })).rejects.toThrow(/category "Actus" does not exist/);
+    expect(strapi.created).toEqual([]);
+  });
+
+  it("guards the correlation field on every route's mapping", async () => {
+    const strapi = fakeStrapi();
+    const migrator = new Migrator(
+      routedConfig({
+        mapping: { route: { blog: [{ target: "titre", source: "title.rendered" }] } },
+      }),
+      { strapi: strapi.adapter, wp: routingWp() },
+    );
+    await expect(migrator.run({ only: ["posts"] })).rejects.toThrow(/route "blog".*never writes "wpId"/s);
+  });
+
+  it("keeps routed entries findable, records their redirect, and reports the split", async () => {
+    const { state, events } = await runRouted();
+    expect(state.posts[1]?.documentId).toBeDefined(); // comments and menus still resolve it
+    expect(state.custom["route:blog"]?.[1]).toBeDefined();
+    expect(state.redirects.find((r) => r.slug === "une-actu")?.kind).toBe("blog");
+    const summary = events.find((e) => e.type === "log" && e.code === "routing.summary");
+    expect(summary && "params" in summary && summary.params).toEqual({
+      counts: "2 → blog, 1 → presse",
+    });
+  });
+
+  it("shows the routed content-type in the preview, before anything is written", async () => {
+    const strapi = fakeStrapi();
+    const migrator = new Migrator(routedConfig(), { strapi: strapi.adapter, wp: routingWp() });
+    const items = await migrator.preview({ kind: "posts", limit: 4 });
+    expect(items.map((i) => [i.wpId, i.route ?? null, i.uid])).toEqual([
+      [1, "blog", "api::blog.blog"],
+      [2, "presse", "api::press.press"],
+      [3, null, "api::post.post"],
+      [4, "blog", "api::blog.blog"],
+    ]);
+    expect(strapi.created).toEqual([]);
+  });
+});

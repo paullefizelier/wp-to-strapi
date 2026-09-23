@@ -18,6 +18,7 @@ export const MappingSetSchema = z.object({
   category: MappingRows.optional(),
   tag: MappingRows.optional(),
   custom: z.record(MappingRows).optional(),
+  route: z.record(MappingRows).optional(),
 });
 
 export const MigrationConfigSchema = z.object({
@@ -63,6 +64,23 @@ export const MigrationConfigSchema = z.object({
     .array(z.object({ restBase: z.string().min(1), uid: z.string().min(1), pluralPath: z.string().optional() }))
     .default([]),
   redirectsFile: z.string().optional(),
+  routing: z
+    .object({
+      routes: z
+        .array(
+          z.object({
+            name: z.string().min(1),
+            from: z.enum(["posts", "pages"]).optional(),
+            categories: z.array(z.union([z.string(), z.number()])).optional(),
+            tags: z.array(z.union([z.string(), z.number()])).optional(),
+            uid: z.string().min(1),
+            pluralPath: z.string().optional(),
+          }),
+        )
+        .default([]),
+      unmatched: z.enum(["default", "skip"]).default("default"),
+    })
+    .default({ routes: [], unmatched: "default" }),
   only: z
     .array(
       z.enum([

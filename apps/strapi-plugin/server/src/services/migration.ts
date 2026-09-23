@@ -1,7 +1,13 @@
 import type { Core } from "@strapi/strapi";
 import { buildConfig, Migrator, WordPressClient } from "@paullefizelier/wp-to-strapi-core";
 import { NativeStrapiAdapter } from "@paullefizelier/wp-to-strapi-adapter";
-import type { CustomTypeConfig, Kind, MappingSet } from "@paullefizelier/wp-to-strapi-core";
+import type {
+  CustomTypeConfig,
+  Kind,
+  MappingSet,
+  RouteConfig,
+  RoutingConfig,
+} from "@paullefizelier/wp-to-strapi-core";
 import type { Run } from "./run-store";
 
 interface Settings {
@@ -18,6 +24,18 @@ interface Settings {
   customTypes: string[];
   htmlFallback: boolean;
   mapping: string;
+  routing: string;
+}
+
+function parseRouting(text: string | undefined): Partial<RoutingConfig> | undefined {
+  if (!text || !text.trim()) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(`Routing is not valid JSON: ${(err as Error).message}`);
+  }
+  return Array.isArray(parsed) ? { routes: parsed as RouteConfig[] } : (parsed as Partial<RoutingConfig>);
 }
 
 /** The admin stores the mapping as JSON text; a typo there should fail loudly, not silently. */
@@ -86,6 +104,7 @@ const service = ({ strapi }: { strapi: Core.Strapi }) => {
       customTypes: parseCustomTypes(s.customTypes),
       htmlFallback: s.htmlFallback,
       mapping: parseMapping(s.mapping),
+      routing: parseRouting(s.routing),
       stateFile:
         (strapi.config.get("plugin::wp-import.stateFile") as string | undefined) ??
         "./.wp-import-state.json",

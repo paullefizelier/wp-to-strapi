@@ -18,6 +18,7 @@ const empty = (): MigrationConfigInput => ({
   statuses: ["publish"],
   customTypes: [],
   taxonomies: [],
+  routing: { routes: [], unmatched: "default" },
   mapping: {},
   only: ["media", "posts", "pages"],
   retryFailed: false,

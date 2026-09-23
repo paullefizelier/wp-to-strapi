@@ -240,6 +240,48 @@ Failed ids are kept in the state file, so `--retry-failed` (a button in the UI, 
 in the API) fetches only those entries from WordPress — `?include=1,2` — instead of walking the
 whole site again. An entry that succeeds on the retry stops being reported.
 
+### Routing by category
+
+Part of a WordPress listing can go to its own content-type, with its own mapping. The typical
+case: posts in *Actualités* become `api::blog.blog` entries with a fixed target group, posts in
+*Communiqués de presse* become `api::press.press` entries, and the rest stay articles.
+
+```jsonc
+// routing
+{
+  "routes": [
+    { "name": "blog",   "categories": ["Actualités"],            "uid": "api::blog.blog" },
+    { "name": "presse", "categories": ["Communiqués de presse"], "uid": "api::press.press" }
+  ],
+  "unmatched": "default"   // or "skip": posts no route takes are left out
+}
+
+// mapping — each route has its own rows, under `route.<name>`
+{
+  "route": {
+    "blog": [
+      { "target": "title",       "source": "title.rendered", "transforms": ["decodeEntities"] },
+      { "target": "targetGroup", "value": "grand-public" },
+      { "target": "wpId",        "source": "id" }
+    ]
+  }
+}
+```
+
+- Categories and tags are named the way people type them: `"Communiqués de presse"`,
+  `"communiques de presse"`, the slug `communiques-de-presse` and the id all match.
+- Routes are evaluated in order, and a post in two routed categories goes to the **first** one.
+- A category that does not exist in WordPress **stops the run** before anything is written,
+  and says which ones do exist — a post silently sent to the wrong type is far harder to undo.
+- Each route's mapping must write the correlation field like any other, and a missing route
+  mapping falls back to the `post` one.
+- The preview shows which route took each entry, so the split can be checked first.
+- Routed entries stay recorded under `posts` too, so comments, menus and retries keep finding
+  them; the redirect table names the route they landed in.
+
+In the UI this is the **Routage par catégorie** card in the mapping step, with categories picked
+from your WordPress and each route getting its own tab in the mapping editor. CLI: `ROUTES_FILE`.
+
 ### Components and dynamic zones
 
 A Strapi content field is often not a plain attribute but a component — a `content.rich-text`

@@ -9,6 +9,8 @@ import {
   type MigrateOptions,
   type MappingSet,
   type MigratorEvent,
+  type RouteConfig,
+  type RoutingConfig,
 } from "@paullefizelier/wp-to-strapi-core";
 
 function required(name: string): string {
@@ -43,6 +45,18 @@ function parseCustomTypes(value: string | undefined): CustomTypeConfig[] {
     }
     return pluralPath ? { restBase, uid, pluralPath } : { restBase, uid };
   });
+}
+
+/** ROUTES_FILE=./routes.json — `{ "routes": [...], "unmatched": "default" | "skip" }`. */
+function loadRouting(path: string | undefined): Partial<RoutingConfig> | undefined {
+  if (!path) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<RoutingConfig> | RouteConfig[];
+    // A bare array is the common case; accept it without the wrapper.
+    return Array.isArray(parsed) ? { routes: parsed } : parsed;
+  } catch (err) {
+    throw new Error(`Cannot read ROUTES_FILE "${path}": ${(err as Error).message}`);
+  }
 }
 
 /** MAPPING_FILE=./mapping.json — the same JSON shape both UIs edit. */
@@ -105,6 +119,7 @@ function loadConfigFromEnv() {
     customTypes: parseCustomTypes(process.env.WP_CUSTOM_TYPES),
     mapping: loadMapping(process.env.MAPPING_FILE),
     taxonomies: parseTaxonomies(process.env.WP_TAXONOMIES),
+    routing: loadRouting(process.env.ROUTES_FILE),
     redirectsFile: process.env.REDIRECTS_FILE,
   });
 }

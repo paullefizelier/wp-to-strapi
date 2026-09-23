@@ -15,13 +15,21 @@ import { noticeText } from "~/utils/notices";
 const { config } = useMigrationConfig();
 const toast = useToast();
 
-type MappingKey = "common" | "post" | "page" | "category" | "tag" | `custom:${string}`;
+type MappingKey =
+  | "common"
+  | "post"
+  | "page"
+  | "category"
+  | "tag"
+  | `custom:${string}`
+  | `route:${string}`;
 
 interface PreviewItem {
   kind: string;
   wpId: number;
   slug: string;
   uid: string;
+  route?: string;
   data: Record<string, unknown>;
   notices: Array<{ code?: string; params?: unknown; message: string; level: string }>;
 }
@@ -43,6 +51,11 @@ const tabs = computed<TabsItem[]>(() => [
     label: t.restBase,
     icon: "i-lucide-shapes",
   })),
+  ...(config.value.routing?.routes ?? []).map((r: { name: string }) => ({
+    value: `route:${r.name}`,
+    label: r.name,
+    icon: "i-lucide-route",
+  })),
 ]);
 
 watch(tabs, (list) => {
@@ -54,6 +67,11 @@ const isTerm = computed(() => active.value === "category" || active.value === "t
 /** Which REST base and Strapi UID the active tab reads its fields from. */
 const endpoints = computed(() => {
   const key = active.value;
+  if (key.startsWith("route:")) {
+    const name = key.slice("route:".length);
+    const route = config.value.routing?.routes.find((r: { name: string }) => r.name === name);
+    return { restBase: route?.from ?? "posts", uid: route?.uid ?? "", pluralPath: route?.pluralPath };
+  }
   if (key.startsWith("custom:")) {
     const restBase = key.slice("custom:".length);
     const type = config.value.customTypes.find((t: { restBase: string }) => t.restBase === restBase);
@@ -74,6 +92,9 @@ const rows = computed<FieldMapping[]>({
   get() {
     const key = active.value;
     const m = config.value.mapping ?? {};
+    if (key.startsWith("route:")) {
+      return m.route?.[key.slice("route:".length)] ?? m.post ?? defaultEntryMapping();
+    }
     if (key.startsWith("custom:")) {
       const restBase = key.slice("custom:".length);
       return m.custom?.[restBase] ?? m.post ?? defaultEntryMapping();
@@ -87,6 +108,11 @@ const rows = computed<FieldMapping[]>({
   set(next) {
     const key = active.value;
     const m = { ...(config.value.mapping ?? {}) };
+    if (key.startsWith("route:")) {
+      m.route = { ...(m.route ?? {}), [key.slice("route:".length)]: next };
+      config.value.mapping = m;
+      return;
+    }
     if (key.startsWith("custom:")) {
       m.custom = { ...(m.custom ?? {}), [key.slice("custom:".length)]: next };
     } else {
@@ -262,7 +288,9 @@ async function runPreview() {
   const key = active.value;
   const kind = key.startsWith("custom:")
     ? "custom"
-    : key === "page"
+    : key.startsWith("route:")
+      ? "posts"
+      : key === "page"
       ? "pages"
       : key === "category"
         ? "categories"
@@ -277,7 +305,7 @@ async function runPreview() {
         strapi: { ...config.value.strapi, token: config.value.strapi.token || "preview" },
         kind,
         restBase: key.startsWith("custom:") ? key.slice("custom:".length) : undefined,
-        limit: 2,
+        limit: key.startsWith("route:") ? 6 : 2,
       },
     });
     preview.value = res.items;
@@ -545,6 +573,9 @@ function resetToDefault() {
           <div v-for="item in preview" :key="item.wpId" class="space-y-1">
             <div class="flex items-center gap-2 text-xs text-dimmed font-mono">
               <UBadge color="neutral" variant="subtle" size="sm">#{{ item.wpId }}</UBadge>
+              <UBadge v-if="item.route" color="primary" variant="subtle" size="sm" icon="i-lucide-route">
+                {{ item.route }}
+              </UBadge>
               <span class="truncate">{{ item.slug }} → {{ item.uid }}</span>
             </div>
             <pre class="text-xs bg-elevated rounded-md p-3 overflow-x-auto">{{ JSON.stringify(item.data, null, 2) }}</pre>
