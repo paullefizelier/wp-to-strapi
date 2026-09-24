@@ -199,3 +199,26 @@ describe("decodeEntities", () => {
     expect(decodeEntities("déjà vu — 100% ok")).toBe("déjà vu — 100% ok");
   });
 });
+
+describe("findMediaReferences / buildSourceMatcher", () => {
+  it("collects ids and URLs from rendered and raw block markup", async () => {
+    const { findMediaReferences } = await import("./html-transform.js");
+    const refs = findMediaReferences(
+      `<!-- wp:gallery {"ids":[4,5]} --><figure data-id="6"><img class="wp-image-7" src="/u/a.jpg" srcset="/u/a-300x200.jpg 300w, /u/a-1024x768.jpg 1024w"></figure>` +
+        `<div style="background-image:url('/u/bg.png')"></div>`,
+    );
+    expect(refs.ids.sort()).toEqual([4, 5, 6, 7]);
+    expect(refs.urls).toEqual(expect.arrayContaining(["/u/a.jpg", "/u/a-300x200.jpg", "/u/bg.png"]));
+  });
+
+  it("matches size variants, -scaled originals and CDN prefixes to their attachment", async () => {
+    const { buildSourceMatcher } = await import("./html-transform.js");
+    const match = buildSourceMatcher([
+      { id: 1, source_url: "https://site.test/app/uploads/sites/4/2024/05/photo-scaled.jpg" },
+      { id: 2, source_url: "https://site.test/app/uploads/2024/05/logo.png" },
+    ]);
+    expect(match("https://site.test/app/uploads/sites/4/2024/05/photo-1024x683.jpg")).toBe(1);
+    expect(match("https://i0.wp.com/site.test/app/uploads/2024/05/logo.png?w=300")).toBe(2);
+    expect(match("https://site.test/other.jpg")).toBeNull();
+  });
+});

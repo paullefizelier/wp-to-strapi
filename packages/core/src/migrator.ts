@@ -5,8 +5,10 @@ import pLimit from "p-limit";
 import type { AppConfig, CustomTypeConfig, RouteConfig } from "./config.js";
 import { extractReadableContent } from "./content-extract.js";
 import {
+  buildSourceMatcher,
   decodeEntities,
   detectFlavour,
+  findMediaReferences,
   findShortcodes,
   findUnresolvedMediaUrls,
   rewriteMediaUrls,
@@ -19,6 +21,7 @@ import {
   defaultMenuMapping,
   defaultTermMapping,
   mergeMappings,
+  readPath,
   validateMapping,
   type FieldMapping,
 } from "./mapping.js";
@@ -277,6 +280,8 @@ export class Migrator extends EventEmitter {
   private retryFailed = false;
   /** Whether this run has a media map to rewrite against. */
   private mediaMigrated = false;
+  /** The kinds this run walks — what "media used by the imported entries" is measured on. */
+  private runKinds: Kind[] = [];
   /** Each route with its categories and tags resolved to WordPress ids. */
   private resolvedRoutes: Array<{ route: RouteConfig; categories: Set<number>; tags: Set<number> }> = [];
   /** How many entries each route took this run, for the summary. */
@@ -518,6 +523,7 @@ export class Migrator extends EventEmitter {
     }
     const configured = this.configuredKinds();
     const kinds = opts.only ? configured.filter((k) => opts.only?.includes(k)) : configured;
+    this.runKinds = kinds;
     this.fire({ type: "run-start", at: new Date().toISOString(), kinds });
 
     const extraStatuses = this.cfg.statuses.filter((st) => st !== "publish");
@@ -1331,6 +1337,7 @@ export class Migrator extends EventEmitter {
   // ----- Media -----
 
   private async migrateMedia(): Promise<void> {
+    if (this.cfg.mediaScope === "used") return this.migrateUsedMedia();
     this.fire({
       type: "section-start",
       kind: "media",
@@ -1344,6 +1351,94 @@ export class Migrator extends EventEmitter {
     }
     await Promise.all(tasks);
     this.fire({ type: "section-end", kind: "media", total: count });
+  }
+
+  /**
+   * Only the files the entries of this run point at. The library is listed first (metadata
+   * only), so the section knows its real size and URLs can be matched to attachments.
+   */
+  private async migrateUsedMedia(): Promise<void> {
+    const refs = await this.collectMediaReferences();
+    const library: WpMedia[] = [];
+    for await (const m of this.wp.media()) library.push(m);
+    const match = buildSourceMatcher(library);
+    const wanted = new Set(refs.ids);
+    for (const url of refs.urls) {
+      const id = match(url);
+      if (id !== null) wanted.add(id);
+    }
+    const used = library.filter((m) => wanted.has(m.id));
+    this.say(notice("media.scoped", { used: used.length, total: library.length }, "info"));
+    this.fire({ type: "section-start", kind: "media", expected: used.length });
+    await Promise.all(used.map((m) => this.limit(() => this.migrateOneMedia(m))));
+    this.fire({ type: "section-end", kind: "media", total: used.length });
+  }
+
+  /**
+   * Attachment ids and URLs referenced by the entries this run will write: featured images,
+   * media in the content, and any field the mapping sends through `mediaId`/`mediaUrl`
+   * (ACF image fields and the like). Entries the routing skips don't count.
+   */
+  private async collectMediaReferences(): Promise<{ ids: number[]; urls: string[] }> {
+    const ids = new Set<number>();
+    const urls = new Set<string>();
+    const set = this.cfg.mapping ?? {};
+    const allRows: FieldMapping[] = Object.values(set).flatMap(
+      (rows: FieldMapping[] | Record<string, FieldMapping[]> | undefined) =>
+        Array.isArray(rows) ? rows : Object.values(rows ?? {}).flat(),
+    );
+    const mediaSources = allRows
+      .filter((r) => r.source && (r.transforms ?? []).some((t) => /^media(Id|Url)\b/.test(t)))
+      .map((r) => r.source as string)
+      .filter((src) => !src.startsWith("$") && src !== "featured_media");
+    const fields = [
+      "id", "featured_media", "content", "categories", "tags",
+      ...new Set(mediaSources.map((src) => src.split(".")[0] as string)),
+    ];
+
+    const take = (entry: WpPost | WpPage, from?: "posts" | "pages") => {
+      if (from) {
+        const route = this.routeFor(entry, from);
+        if (!route && this.resolvedRoutes.length > 0 && this.cfg.routing.unmatched === "skip") return;
+      }
+      if (entry.featured_media) ids.add(entry.featured_media);
+      const found = findMediaReferences(entry.content?.rendered ?? "");
+      for (const id of found.ids) ids.add(id);
+      for (const url of found.urls) urls.add(url);
+      for (const src of mediaSources) {
+        const value = readPath(entry, src);
+        for (const v of Array.isArray(value) ? value : [value]) {
+          if (typeof v === "number" || (typeof v === "string" && /^\d+$/.test(v))) ids.add(Number(v));
+          else if (v && typeof v === "object" && "id" in v) ids.add(Number((v as { id: unknown }).id));
+          else if (typeof v === "string" && v) urls.add(v);
+        }
+      }
+    };
+
+    if (this.runKinds.includes("posts")) {
+      for await (const p of this.wp.posts(this.cfg.statuses, this.scope("posts"), fields)) take(p, "posts");
+    }
+    if (this.runKinds.includes("pages")) {
+      for await (const p of this.wp.pages(this.cfg.statuses, this.scope("pages"), fields)) take(p, "pages");
+    }
+    if (this.runKinds.includes("custom")) {
+      for (const type of this.cfg.customTypes) {
+        try {
+          for await (const p of this.wp.customType(
+            type.restBase,
+            this.cfg.statuses,
+            this.scope(`custom:${type.restBase}`),
+            fields,
+          )) {
+            take(p);
+          }
+        } catch {
+          /* reported when the type itself is migrated */
+        }
+      }
+    }
+    ids.delete(0);
+    return { ids: [...ids], urls: [...urls] };
   }
 
   private async migrateOneMedia(m: WpMedia): Promise<void> {

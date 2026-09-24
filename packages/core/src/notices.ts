@@ -34,6 +34,7 @@ export const NOTICE_CODES = [
   "routing.unknownTerm",
   "routing.summary",
   "wp.redirected",
+  "media.scoped",
 ] as const;
 
 export type NoticeCode = (typeof NOTICE_CODES)[number];
@@ -64,6 +65,7 @@ export interface NoticeParamsByCode {
   "routing.unknownTerm": { route: string; taxonomy: string; term: string; available: string };
   "routing.summary": { counts: string };
   "wp.redirected": { from: string; to: string };
+  "media.scoped": { used: number; total: number };
 }
 
 export type NoticeParams<C extends NoticeCode = NoticeCode> = NoticeParamsByCode[C];
@@ -125,6 +127,9 @@ const EN: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
   "wp.redirected": (p) =>
     `WordPress answers from ${p.to}, not ${p.from} — following it. Set the WordPress URL to ` +
     `${p.to} to skip the redirect.`,
+  "media.scoped": (p) =>
+    `Media: ${p.used} of ${p.total} files are used by the entries being imported — only those ` +
+    `are migrated.`,
   "failures.hint": () => "Re-run with retryFailed (CLI: --retry-failed) to retry just these.",
 };
 

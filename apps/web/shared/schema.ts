@@ -91,6 +91,8 @@ export const MigrationConfigSchema = z.object({
     .default(["media", "posts", "pages"]),
   /** Re-run only what the previous run recorded as failed. */
   retryFailed: z.boolean().default(false),
+  /** `used`: only the files the imported entries point at. */
+  mediaScope: z.enum(["all", "used"]).default("all"),
   /** WordPress ids to import per kind; a kind left out imports everything. */
   selection: z
     .object({

@@ -585,6 +585,12 @@ async function startMigration() {
                   label="Récupérer le contenu des page builders"
                   description="Lit la page publique quand le REST ne renvoie rien (Elementor, Divi, FSE)."
                 />
+                <USwitch
+                  :model-value="config.mediaScope === 'used'"
+                  label="Uniquement les médias utilisés"
+                  description="Image à la une, images du contenu et champs média des entrées importées — pas toute la médiathèque."
+                  @update:model-value="(v: boolean) => { config.mediaScope = v ? 'used' : 'all'; }"
+                />
               </div>
 
               <UFormField

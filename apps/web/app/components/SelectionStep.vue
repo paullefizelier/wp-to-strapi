@@ -456,6 +456,15 @@ const previewFields = computed(() =>
         :title="`Sélection manuelle : seules les ${selectedCount} entrées cochées partiront.`"
         :description="`Une entrée publiée sur WordPress après ce choix ne sera pas importée.${staleCount ? ` ${staleCount} entrée(s) choisie(s) ne sont plus listées par WordPress.` : ''}`"
       />
+      <UAlert
+        v-if="selectedSet !== null && config.mediaScope !== 'used'"
+        color="warning"
+        variant="subtle"
+        icon="i-lucide-image"
+        title="Toute la médiathèque sera importée"
+        description="Seules les entrées cochées partiront, mais tous les médias WordPress aussi."
+        :actions="[{ label: 'Uniquement les médias utilisés', color: 'warning', variant: 'solid', onClick: () => { config.mediaScope = 'used' } }]"
+      />
 
       <div class="flex flex-wrap items-center gap-2">
         <UInput

@@ -121,6 +121,7 @@ function loadConfigFromEnv() {
     taxonomies: parseTaxonomies(process.env.WP_TAXONOMIES),
     routing: loadRouting(process.env.ROUTES_FILE),
     redirectsFile: process.env.REDIRECTS_FILE,
+    mediaScope: process.env.MEDIA_SCOPE === "used" ? "used" : undefined,
   });
 }
 

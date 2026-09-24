@@ -146,6 +146,11 @@ export interface AppConfig {
    * imports nothing of that kind.
    */
   selection: SelectionConfig;
+  /**
+   * `used` migrates only the files the imported entries point at (featured image, images in
+   * the content, fields mapped through `mediaId`/`mediaUrl`); `all` the whole library.
+   */
+  mediaScope: "all" | "used";
 }
 
 export interface SelectionConfig {
@@ -186,6 +191,7 @@ export function buildConfig(input: {
   retries?: number;
   customTypes?: CustomTypeConfig[];
   selection?: SelectionConfig;
+  mediaScope?: "all" | "used";
   taxonomies?: TaxonomyConfig[];
   routing?: Partial<RoutingConfig>;
   redirectsFile?: string;
@@ -238,5 +244,6 @@ export function buildConfig(input: {
     redirectsFile: input.redirectsFile,
     mapping: input.mapping ?? {},
     selection: input.selection ?? {},
+    mediaScope: input.mediaScope ?? "all",
   };
 }

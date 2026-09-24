@@ -58,6 +58,9 @@ const FR: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
   "wp.redirected": (p) =>
     `WordPress répond depuis ${p.to} et non ${p.from} — redirection suivie. Mettez ${p.to} ` +
     `comme URL WordPress pour l'éviter.`,
+  "media.scoped": (p) =>
+    `Médias : ${p.used} fichier(s) sur ${p.total} sont utilisés par les contenus importés — ` +
+    `seuls ceux-là sont migrés.`,
   "failures.hint": () =>
     "Relancez avec « Relancer uniquement ces entrées » pour ne reprendre que celles-là.",
 };

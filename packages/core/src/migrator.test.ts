@@ -1044,3 +1044,96 @@ describe("Selection", () => {
     ]);
   });
 });
+
+describe("Media used by the imported entries", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const unused: WpMedia = {
+    ...MEDIA,
+    id: 8,
+    slug: "unused",
+    source_url: `${WP}/wp-content/uploads/2024/05/unused.jpg`,
+  };
+  const inContent: WpMedia = {
+    ...MEDIA,
+    id: 9,
+    slug: "inline",
+    source_url: `${WP}/wp-content/uploads/2024/05/inline.png`,
+  };
+
+  async function run(over: Record<string, unknown>, posts: WpPost[]) {
+    const events: MigratorEvent[] = [];
+    const wp = fakeWp({
+      media: () => stream([MEDIA, unused, inContent]),
+      posts: () => stream(posts),
+    });
+    const m = new Migrator(
+      buildConfig({
+        wp: { baseUrl: WP },
+        strapi: { baseUrl: "https://cms.example.com", token: "t" },
+        stateFile: join(dir, "state.json"),
+        concurrency: 1,
+        mediaScope: "used",
+        ...over,
+      }),
+      { strapi: fakeStrapi().adapter, wp: wp.wp },
+    );
+    m.on("event", (e) => events.push(e));
+    await m.run({ only: ["media", "posts"] });
+    const media = events.filter((e) => e.type === "item-ok" && e.kind === "media").map((e) => e.wpId);
+    return { media, events };
+  }
+
+  it("keeps the featured image and the images in the content — sizes and all", async () => {
+    const { media, events } = await run({}, [
+      wpPost({
+        id: 1,
+        slug: "a",
+        featured_media: 7,
+        content: { rendered: `<p><img src="${WP}/wp-content/uploads/2024/05/inline-1024x768.png"></p>` },
+      }),
+    ]);
+    expect(media.sort()).toEqual([7, 9]);
+    const start = events.find((e) => e.type === "section-start" && e.kind === "media");
+    expect(start).toMatchObject({ expected: 2 });
+    const scoped = events.find((e) => e.type === "log" && e.code === "media.scoped");
+    expect(scoped && "params" in scoped ? scoped.params : null).toEqual({ used: 2, total: 3 });
+  });
+
+  it("follows the selection: an unselected entry's media stay behind", async () => {
+    const posts = [
+      wpPost({ id: 1, slug: "a", featured_media: 7 }),
+      wpPost({ id: 2, slug: "b", featured_media: 8 }),
+    ];
+    // The fake WordPress ignores `include`; filter like the real one would.
+    const { media } = await run({ selection: { posts: [1] } }, posts.filter((p) => p.id === 1));
+    expect(media).toEqual([7]);
+  });
+
+  it("counts ids from Gutenberg markup and fields mapped through mediaId", async () => {
+    const { media } = await run(
+      {
+        mapping: {
+          post: [
+            { target: "title", source: "title.rendered" },
+            { target: "wpId", source: "id" },
+            { target: "hero", source: "acf.hero", transforms: ["mediaId"] },
+          ],
+        },
+      },
+      [
+        {
+          ...wpPost({ id: 1, slug: "a", content: { rendered: '<figure class="wp-block-image"><img class="wp-image-9"></figure>' } }),
+          acf: { hero: 8 },
+        } as WpPost,
+      ],
+    );
+    expect(media.sort()).toEqual([8, 9]);
+  });
+});

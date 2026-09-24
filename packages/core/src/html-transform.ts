@@ -205,6 +205,68 @@ export function findUnresolvedMediaUrls(html: string, wpBaseUrl: string): string
   return [...found];
 }
 
+/**
+ * Every attachment an entry's HTML points at: ids WordPress wrote into the markup (Gutenberg's
+ * `wp-image-123`, gallery `data-id`, block comments in raw content) and every URL, to be matched
+ * against the media library with {@link buildSourceMatcher}.
+ */
+export function findMediaReferences(html: string): { ids: number[]; urls: string[] } {
+  if (!html) return { ids: [], urls: [] };
+  const ids = new Set<number>();
+  for (const m of html.matchAll(/\bwp-image-(\d+)\b/g)) ids.add(Number(m[1]));
+  for (const m of html.matchAll(/\bdata-(?:id|attachment-id)\s*=\s*["'](\d+)["']/g)) ids.add(Number(m[1]));
+  for (const m of html.matchAll(/<!--\s*wp:[\w/-]+\s+(\{[^]*?\})\s*\/?-->/g)) {
+    for (const id of (m[1] ?? "").matchAll(/"(?:id|mediaId)"\s*:\s*(\d+)/g)) ids.add(Number(id[1]));
+    for (const list of (m[1] ?? "").matchAll(/"ids"\s*:\s*\[([\d,\s]*)\]/g)) {
+      for (const id of (list[1] ?? "").split(",")) if (id.trim()) ids.add(Number(id));
+    }
+  }
+
+  const urls = new Set<string>();
+  for (const m of html.matchAll(URL_ATTR)) if (m[3]) urls.add(m[3].trim());
+  for (const m of html.matchAll(CSS_URL)) if (m[2]) urls.add(m[2].trim());
+  for (const m of html.matchAll(SRCSET_ATTR)) {
+    for (const candidate of (m[3] ?? "").split(",")) {
+      const url = candidate.trim().split(/\s+/)[0];
+      if (url) urls.add(url);
+    }
+  }
+  return { ids: [...ids], urls: [...urls] };
+}
+
+/**
+ * Resolve any URL found in content to the attachment it came from, by the same rules as the
+ * rewrite: size variants, `-scaled` originals and CDN prefixes all lead back to the original.
+ */
+export function buildSourceMatcher(
+  media: ReadonlyArray<{ id: number; source_url: string }>,
+): (rawUrl: string) => number | null {
+  const byPath = new Map<string, number>();
+  const byName = new Map<string, number | null>();
+  for (const m of media) {
+    const parsed = m.source_url ? parseUrl(m.source_url) : null;
+    if (!parsed) continue;
+    byPath.set(pathKey(parsed.path), m.id);
+    const nameKey = normalizeFileName(parsed.name);
+    const seen = byName.get(nameKey);
+    if (seen === undefined) byName.set(nameKey, m.id);
+    else if (seen !== m.id) byName.set(nameKey, null);
+  }
+  return (rawUrl) => {
+    const parsed = parseUrl(rawUrl);
+    if (!parsed) return null;
+    let path = parsed.path;
+    for (;;) {
+      const hit = byPath.get(pathKey(path));
+      if (hit !== undefined) return hit;
+      const next = path.indexOf("/", 1);
+      if (next < 0) break;
+      path = path.slice(next);
+    }
+    return byName.get(normalizeFileName(parsed.name)) ?? null;
+  };
+}
+
 /** Which editor produced the HTML WordPress handed us. */
 export type ContentFlavour =
   | "empty"

@@ -23,6 +23,7 @@ const empty = (): MigrationConfigInput => ({
   only: ["media", "posts", "pages"],
   retryFailed: false,
   selection: {},
+  mediaScope: "all",
 });
 
 /**
