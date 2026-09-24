@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { h, resolveComponent } from "vue";
 import type { CatalogueEntry, PreviewItem } from "@paullefizelier/wp-to-strapi-core";
+import type { TargetSchema } from "@paullefizelier/wp-to-strapi-core/mapping";
 import type { TableColumn, TabsItem } from "@nuxt/ui";
 import { noticeText } from "~/utils/notices";
 
@@ -352,16 +353,49 @@ async function openPreview(entry: CatalogueEntry) {
   }
 }
 
-/** A readable rendering of one payload value. */
-function show(value: unknown): { text: string; kind: "empty" | "text" | "html" | "json" } {
-  if (value === null || value === undefined || value === "") return { text: "vide", kind: "empty" };
-  if (typeof value === "string") return { text: value, kind: /<[a-z][\s\S]*>/i.test(value) ? "html" : "text" };
-  if (typeof value === "number" || typeof value === "boolean") return { text: String(value), kind: "text" };
-  return { text: JSON.stringify(value, null, 2), kind: "json" };
+// ----- Target schema, to show the entry as its Strapi edit screen -----
+
+const schemas = ref<Record<string, TargetSchema | null>>({});
+const schemaLoading = ref(false);
+
+/** The REST path a UID lives under, when the config names one. */
+function pluralPathOf(uid: string): string | undefined {
+  const s = config.value.strapi;
+  if (uid === s.postUid) return s.postPluralPath;
+  if (uid === s.pageUid) return s.pagePluralPath;
+  return (
+    config.value.routing.routes.find((r) => r.uid === uid)?.pluralPath ??
+    config.value.customTypes.find((t) => t.uid === uid)?.pluralPath
+  );
 }
 
-const previewFields = computed(() =>
-  Object.entries(previewItem.value?.data ?? {}).map(([field, value]) => ({ field, ...show(value) })),
+async function loadSchema(uid: string) {
+  if (uid in schemas.value || !config.value.strapi.token) return;
+  schemaLoading.value = true;
+  try {
+    const schema = await $fetch<TargetSchema>("/api/fields/strapi", {
+      method: "POST",
+      body: {
+        baseUrl: config.value.strapi.baseUrl,
+        token: config.value.strapi.token,
+        uid,
+        pluralPath: pluralPathOf(uid),
+      },
+    });
+    schemas.value = { ...schemas.value, [uid]: schema };
+  } catch {
+    schemas.value = { ...schemas.value, [uid]: null };
+  } finally {
+    schemaLoading.value = false;
+  }
+}
+
+watch(previewItem, (item) => {
+  if (item?.uid) void loadSchema(item.uid);
+});
+
+const previewSchema = computed(() =>
+  previewItem.value ? (schemas.value[previewItem.value.uid] ?? null) : null,
 );
 </script>
 
@@ -577,23 +611,13 @@ const previewFields = computed(() =>
 
             <div class="space-y-2">
               <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
-                Champs envoyés à Strapi ({{ previewFields.length }})
+                La fiche dans Strapi
               </h3>
-              <div class="rounded-md border border-default divide-y divide-default">
-                <div v-for="f in previewFields" :key="f.field" class="px-3 py-2 space-y-1">
-                  <div class="flex items-center gap-2">
-                    <span class="font-mono text-xs text-highlighted">{{ f.field }}</span>
-                    <UBadge v-if="f.kind === 'html'" size="sm" color="neutral" variant="outline">HTML</UBadge>
-                    <UBadge v-else-if="f.kind === 'json'" size="sm" color="neutral" variant="outline">objet</UBadge>
-                  </div>
-                  <p v-if="f.kind === 'empty'" class="text-xs text-dimmed italic">vide</p>
-                  <p v-else-if="f.kind === 'text'" class="text-xs text-toned break-words">{{ f.text }}</p>
-                  <pre
-                    v-else
-                    class="text-xs text-toned bg-elevated rounded p-2 max-h-56 overflow-auto whitespace-pre-wrap break-all"
-                  >{{ f.text }}</pre>
-                </div>
-              </div>
+              <EntryFillPreview
+                :item="previewItem"
+                :schema="previewSchema"
+                :schema-loading="schemaLoading && !(previewItem.uid in schemas)"
+              />
               <p class="text-xs text-dimmed">
                 Pour changer un champ, revenez à l'étape Mapping : l'aperçu se recalcule à chaque ouverture.
               </p>

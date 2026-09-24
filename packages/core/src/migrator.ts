@@ -228,6 +228,12 @@ export interface PreviewItem {
   notices: Notice[];
   /** Routing would leave this entry out (only reported when previewing chosen ids). */
   skipped?: boolean;
+  /**
+   * Fields that come out empty only because what they point at is not migrated yet — media,
+   * terms, authors — keyed by target, with what WordPress holds. A real run fills them once
+   * those steps have run.
+   */
+  pending?: Record<string, string>;
 }
 
 export interface PreviewOptions {
@@ -882,6 +888,11 @@ export class Migrator extends EventEmitter {
         custom?.restBase,
         route?.name,
       );
+      const pending = this.pendingFields(
+        entry,
+        built.data,
+        this.mappingFor(kind === "pages" ? "page" : "post", custom?.restBase, route?.name),
+      );
       items.push({
         kind: kind === "custom" ? "custom" : kind,
         uid: route?.uid ?? defaultUid,
@@ -891,6 +902,7 @@ export class Migrator extends EventEmitter {
         data: built.data,
         notices: built.notices,
         ...(skipped ? { skipped: true } : {}),
+        ...(Object.keys(pending).length > 0 ? { pending } : {}),
       });
       if (items.length >= limit) break;
     }
@@ -950,6 +962,42 @@ export class Migrator extends EventEmitter {
         uid: skipped ? null : (route?.uid ?? defaultUid),
         ...(route ? { route: route.name } : {}),
       });
+    }
+    return out;
+  }
+
+  private taxonomyMigrates(taxonomy: string): boolean {
+    const st = this.cfg.strapi;
+    if (taxonomy === "categories") return Boolean(st.categoryUid);
+    if (taxonomy === "tags") return Boolean(st.tagUid);
+    if (taxonomy === "authors") return Boolean(st.authorUid);
+    return this.cfg.taxonomies.some((t) => t.restBase === taxonomy);
+  }
+
+  /** See {@link PreviewItem.pending}. */
+  private pendingFields(
+    entry: unknown,
+    data: Record<string, unknown>,
+    rows: ReadonlyArray<FieldMapping>,
+  ): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const row of rows) {
+      if (!row.source || row.source.startsWith("$")) continue;
+      const lookup = (row.transforms ?? []).find((t) => /^(mediaId|mediaUrl|terms:)/.test(t));
+      if (!lookup) continue;
+      // A taxonomy with no Strapi destination never gets migrated: that field stays empty.
+      if (lookup.startsWith("terms:") && !this.taxonomyMigrates(lookup.slice("terms:".length))) continue;
+      const written = readPath(data, row.target);
+      const empty =
+        written === undefined || written === null || (Array.isArray(written) && written.length === 0);
+      if (!empty) continue;
+      const raw = readPath(entry, row.source);
+      const ids = (Array.isArray(raw) ? raw : [raw]).filter(
+        (v) => v !== undefined && v !== null && v !== 0 && v !== "",
+      );
+      if (ids.length === 0) continue;
+      const what = lookup.startsWith("media") ? "média" : lookup.slice("terms:".length);
+      out[row.target] = `${what} WordPress #${ids.join(", #")}`;
     }
     return out;
   }

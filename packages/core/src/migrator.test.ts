@@ -1137,3 +1137,26 @@ describe("Media used by the imported entries", () => {
     expect(media.sort()).toEqual([8, 9]);
   });
 });
+
+describe("Preview: fields waiting on other steps", () => {
+  it("says which empty fields a real run will fill once media and terms exist", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-"));
+    try {
+      const m = new Migrator(
+        buildConfig({
+          wp: { baseUrl: WP },
+          strapi: { baseUrl: "https://cms.example.com", token: "t", categoryUid: "api::category.category" },
+          stateFile: join(dir, "state.json"),
+        }),
+        { strapi: fakeStrapi().adapter, wp: fakeWp().wp },
+      );
+      const [item] = await m.preview({ kind: "posts", ids: [1] });
+      expect(item?.pending).toEqual({
+        cover: "média WordPress #7",
+        categories: "categories WordPress #3",
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
