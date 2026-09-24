@@ -141,6 +141,18 @@ export interface AppConfig {
    * built-in behaviour.
    */
   mapping: MappingSet;
+  /**
+   * Import only these WordPress ids. A kind left out imports everything; an empty list
+   * imports nothing of that kind.
+   */
+  selection: SelectionConfig;
+}
+
+export interface SelectionConfig {
+  posts?: number[];
+  pages?: number[];
+  /** Keyed by custom type REST base. */
+  custom?: Record<string, number[]>;
 }
 
 export const DRAFT_STATUSES = ["draft", "pending", "future", "private"] as const;
@@ -173,6 +185,7 @@ export function buildConfig(input: {
   statuses?: string[];
   retries?: number;
   customTypes?: CustomTypeConfig[];
+  selection?: SelectionConfig;
   taxonomies?: TaxonomyConfig[];
   routing?: Partial<RoutingConfig>;
   redirectsFile?: string;
@@ -224,5 +237,6 @@ export function buildConfig(input: {
     },
     redirectsFile: input.redirectsFile,
     mapping: input.mapping ?? {},
+    selection: input.selection ?? {},
   };
 }

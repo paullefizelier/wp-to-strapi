@@ -2,6 +2,7 @@
 import type { MigratorEvent, Kind } from "@paullefizelier/wp-to-strapi-core";
 import type { TabsItem } from "@nuxt/ui";
 import { noticeText } from "~/utils/notices";
+import type { ImportRow } from "~/components/ImportDetails.vue";
 
 definePageMeta({ title: "Migration en cours" });
 
@@ -47,6 +48,33 @@ const logFilter = ref<"all" | "problems">("all");
 const failures = ref<Array<{ kind: string; wpId: number; message: string }>>([]);
 const retrying = ref(false);
 const toast = useToast();
+const { config: migrationConfig } = useMigrationConfig();
+
+/** One row per entry for the detail table; a retried entry replaces its earlier row. */
+const rows = ref<ImportRow[]>([]);
+const rowIndex = new Map<string, number>();
+let rowSeq = 0;
+
+function recordRow(e: MigratorEvent) {
+  if (e.type !== "item-ok" && e.type !== "item-skip" && e.type !== "item-error") return;
+  const key = `${e.kind}:${e.wpId}`;
+  const row: ImportRow = {
+    key,
+    seq: rowSeq++,
+    kind: e.kind,
+    wpId: e.wpId,
+    outcome: e.type === "item-ok" ? "ok" : e.type === "item-skip" ? "skip" : "error",
+    item: e.item,
+    ...(e.type === "item-ok" ? { detail: e.detail } : {}),
+    ...(e.type === "item-skip" ? { reason: e.reason } : {}),
+    ...(e.type === "item-error" ? { message: e.message } : {}),
+  };
+  const at = rowIndex.get(key);
+  if (at === undefined) {
+    rowIndex.set(key, rows.value.length);
+    rows.value.push(row);
+  } else rows.value[at] = row;
+}
 
 /** Same cause, one line — three hundred identical 403s are one problem, not three hundred. */
 const failureGroups = computed(() => {
@@ -91,13 +119,14 @@ const filterTabs: TabsItem[] = [
 ];
 
 function apply(e: MigratorEvent) {
+  recordRow(e);
   events.value.push(e);
   if (events.value.length > 2000) events.value.splice(0, events.value.length - 2000);
 
   if ("kind" in e && !counters.value[e.kind]) counters.value[e.kind] = emptyCounter();
   if (e.type === "item-ok") {
     counters.value[e.kind]!.ok += 1;
-    currentItem.value = `${e.kind} #${e.wpId} · ${e.detail}`;
+    currentItem.value = `${KIND_LABELS[e.kind] ?? e.kind} #${e.wpId} · ${e.item?.title ?? e.detail}`;
   } else if (e.type === "item-skip") counters.value[e.kind]!.skipped += 1;
   else if (e.type === "item-error") counters.value[e.kind]!.errors += 1;
   else if (e.type === "section-start") {
@@ -388,6 +417,12 @@ onUnmounted(() => {
           </div>
         </div>
       </UCard>
+
+      <ImportDetails
+        :rows="rows"
+        :kind-labels="KIND_LABELS"
+        :strapi-base-url="migrationConfig.strapi.baseUrl"
+      />
 
       <UCard>
         <template #header>

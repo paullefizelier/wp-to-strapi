@@ -82,6 +82,18 @@ export function mediaFileName(m: Pick<WpMedia, "source_url" | "mime_type">): str
   return name;
 }
 
+/** What any post-like entry says about itself, before anything is written. */
+function entryInfo(p: WpPost | WpPage, uid?: string, route?: string): ItemDetails {
+  return {
+    title: decodeEntities(p.title?.rendered ?? "") || p.slug,
+    slug: p.slug,
+    source: p.link,
+    wpStatus: p.status,
+    ...(uid ? { target: uid } : {}),
+    ...(route ? { route } : {}),
+  };
+}
+
 /** Keep the responsive variants Strapi generated so `srcset` can be rebuilt on the way out. */
 function toMediaFormats(file: StrapiUploadFile): MediaFormat[] {
   return Object.values(file.formats ?? {})
@@ -101,6 +113,63 @@ export type Kind =
   | "comments"
   | "menus";
 
+/**
+ * What happened to one entry, for a front-end to show in detail. Everything is optional:
+ * each kind fills what it knows, and `detail`/`message` stay the one-line summary.
+ */
+export interface ItemDetails {
+  /** Human label: the post title, the file name, the term name. */
+  title?: string;
+  slug?: string;
+  /** Where the entry lives in WordPress (permalink, file URL). */
+  source?: string;
+  /** WordPress status (publish, draft, future…). */
+  wpStatus?: string;
+  /** Strapi content-type written to, or "upload" for media. */
+  target?: string;
+  /** The route that took the entry, when routing is configured. */
+  route?: string;
+  /** "dry-run" when nothing was written. */
+  action?: "created" | "updated" | "uploaded" | "dry-run";
+  /** Publication state in Strapi. */
+  status?: "published" | "draft";
+  documentId?: string;
+  /** Media: numeric Strapi file id, its URL, size in bytes, MIME type. */
+  mediaId?: number;
+  url?: string;
+  size?: number;
+  mime?: string;
+  /** Written fields, each value shortened to a readable one-liner. */
+  values?: Record<string, string>;
+  /** Warnings raised for this entry (also emitted as log events). */
+  notices?: Notice[];
+}
+
+/** One-line rendering of each payload field: HTML flattened to text, structures as JSON. */
+export function summarizeValues(data: Record<string, unknown>, max = 160): Record<string, string> {
+  const cut = (t: string) => (t.length > max ? `${t.slice(0, max - 1)}…` : t);
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (value === null || value === undefined) out[key] = "";
+    else if (typeof value === "string") {
+      const text = decodeEntities(value.replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
+      out[key] = cut(text || (value.trim() ? "(HTML)" : ""));
+    } else if (typeof value === "number" || typeof value === "boolean") out[key] = String(value);
+    else {
+      let json: string;
+      try {
+        json = JSON.stringify(value);
+      } catch {
+        json = String(value);
+      }
+      out[key] = cut(json);
+    }
+  }
+  return out;
+}
+
+type WriteAction = "created" | "updated" | "dry-run";
+
 export interface MigrateOptions {
   only?: ReadonlyArray<Kind>;
   /** Re-run only the entries the previous run recorded as failed. */
@@ -111,9 +180,9 @@ export type MigratorEvent =
   | { type: "run-start"; at: string; kinds: Kind[] }
   | { type: "section-start"; kind: Kind; expected?: number }
   | { type: "section-end"; kind: Kind; total: number }
-  | { type: "item-skip"; kind: Kind; wpId: number; reason: string }
-  | { type: "item-ok"; kind: Kind; wpId: number; detail: string }
-  | { type: "item-error"; kind: Kind; wpId: number; message: string }
+  | { type: "item-skip"; kind: Kind; wpId: number; reason: string; item?: ItemDetails }
+  | { type: "item-ok"; kind: Kind; wpId: number; detail: string; item?: ItemDetails }
+  | { type: "item-error"; kind: Kind; wpId: number; message: string; item?: ItemDetails }
   | {
       type: "log";
       level: "info" | "warn" | "error";
@@ -154,6 +223,8 @@ export interface PreviewItem {
   route?: string;
   data: Record<string, unknown>;
   notices: Notice[];
+  /** Routing would leave this entry out (only reported when previewing chosen ids). */
+  skipped?: boolean;
 }
 
 export interface PreviewOptions {
@@ -163,6 +234,29 @@ export interface PreviewOptions {
   restBase?: string;
   /** How many entries to render. */
   limit?: number;
+  /** Render exactly these WordPress ids instead of the first few. */
+  ids?: number[];
+}
+
+/** One entry of a listing to pick from: what it is and where it would land. */
+export interface CatalogueEntry {
+  wpId: number;
+  title: string;
+  slug: string;
+  status: string;
+  date: string;
+  link?: string;
+  /** Category names, to filter on. */
+  categories: string[];
+  /** Content-type it would be written to; null when routing skips it. */
+  uid: string | null;
+  route?: string;
+}
+
+export interface CatalogueOptions {
+  kind: "posts" | "pages" | "custom";
+  /** REST base of the custom type, when `kind` is custom. */
+  restBase?: string;
 }
 
 export interface MigratorDeps {
@@ -481,19 +575,39 @@ export class Migrator extends EventEmitter {
     });
   }
 
-  /** How many entries a section will walk, honouring the configured statuses and any retry. */
+  /**
+   * How many entries a section will walk, honouring the configured statuses, the selection
+   * and any retry. A narrowed scope counts ids asked for, which may include some WordPress
+   * no longer has — close enough for a progress bar.
+   */
   private async expectedCount(restBase: string): Promise<number> {
-    const scope = this.retryScope(restBase === "posts" || restBase === "pages" ? restBase : `custom:${restBase}`);
-    if (scope) return scope.filter((id) => id > 0).length;
+    const scope = this.scope(restBase === "posts" || restBase === "pages" ? restBase : `custom:${restBase}`);
+    if (scope) return scope.length;
     return this.wp.count(restBase, { status: this.cfg.statuses.join(",") });
   }
 
-  /** On a retry run, narrow a listing to the ids that failed; otherwise take everything. */
-  private retryScope(kind: string): number[] | undefined {
-    if (!this.retryFailed) return undefined;
-    // An empty list would read as "no filter", so fall back to an id that matches nothing.
-    const ids = this.state.failedIds(kind);
-    return ids.length > 0 ? ids : [-1];
+  /** The ids the user picked for a kind (`posts`, `pages`, `custom:<restBase>`); undefined = all. */
+  private selectedIds(kind: string): number[] | undefined {
+    const sel = this.cfg.selection ?? {};
+    if (kind === "posts") return sel.posts;
+    if (kind === "pages") return sel.pages;
+    if (kind.startsWith("custom:")) return sel.custom?.[kind.slice("custom:".length)];
+    return undefined;
+  }
+
+  /**
+   * Narrow a listing to the selected ids and, on a retry run, to those that failed.
+   * Undefined means take everything.
+   */
+  private scope(kind: string): number[] | undefined {
+    const selected = this.selectedIds(kind);
+    let ids: number[] | undefined = selected;
+    if (this.retryFailed) {
+      const failed = this.state.failedIds(kind);
+      ids = selected ? failed.filter((id) => selected.includes(id)) : failed;
+    }
+    // An empty list means nothing: the listing is not even requested (see WordPressClient).
+    return ids;
   }
 
   private summary() {
@@ -578,6 +692,12 @@ export class Migrator extends EventEmitter {
     kind: Kind = "categories",
   ): Promise<void> {
     if (this.retryFailed && !this.state.failedIds(taxonomy).includes(term.id)) return;
+    const info: ItemDetails = {
+      title: decodeEntities(term.name),
+      slug: term.slug,
+      source: term.link,
+      target: uid,
+    };
     try {
       const mapped = applyMapping(term, this.termMapping(taxonomy), {
         state: this.state.get(),
@@ -585,29 +705,36 @@ export class Migrator extends EventEmitter {
       });
       for (const n of mapped.notices) this.say(n);
       const data = mapped.data;
+      const item: ItemDetails = {
+        ...info,
+        values: summarizeValues(data),
+        ...(mapped.notices.length > 0 ? { notices: mapped.notices } : {}),
+      };
       if (this.cfg.dryRun) {
-        this.fire({ type: "item-ok", kind, wpId: term.id, detail: `[dry-run] ${term.slug}` });
+        this.fire({
+          type: "item-ok",
+          kind,
+          wpId: term.id,
+          detail: `[dry-run] ${term.slug}`,
+          item: { ...item, action: "dry-run" },
+        });
         return;
       }
-      const existing = await this.strapi.findOneBy(
-        uid,
-        this.cfg.strapi.correlationField,
-        term.id,
-        pluralOverride,
-      );
-      const saved = existing
-        ? await this.strapi.update(uid, existing.documentId, data, pluralOverride, {
-            status: "published",
-          })
-        : await this.strapi.create(uid, data, pluralOverride, { status: "published" });
+      const saved = await this.upsertRecord(uid, pluralOverride, term.id, data);
       this.state.setTerm(taxonomy, term.id, saved.documentId);
       this.state.clearFailure(taxonomy, term.id);
       await this.state.persist();
-      this.fire({ type: "item-ok", kind, wpId: term.id, detail: `${term.slug} → ${saved.documentId}` });
+      this.fire({
+        type: "item-ok",
+        kind,
+        wpId: term.id,
+        detail: `${term.slug} → ${saved.documentId}`,
+        item: { ...item, action: saved.action, status: "published", documentId: saved.documentId },
+      });
     } catch (err) {
       this.state.recordFailure(taxonomy, term.id, (err as Error).message);
       await this.state.persist();
-      this.fire({ type: "item-error", kind, wpId: term.id, message: (err as Error).message });
+      this.fire({ type: "item-error", kind, wpId: term.id, message: (err as Error).message, item: info });
     }
   }
 
@@ -625,7 +752,7 @@ export class Migrator extends EventEmitter {
         for await (const entry of this.wp.customType(
           type.restBase,
           this.cfg.statuses,
-          this.retryScope(`custom:${type.restBase}`),
+          this.scope(`custom:${type.restBase}`),
         )) {
           // A single type only wants one WordPress entry — the one named, or the first.
           if (type.single) {
@@ -656,7 +783,7 @@ export class Migrator extends EventEmitter {
 
   private async migrateOneCustom(p: WpPost, type: CustomTypeConfig): Promise<void> {
     try {
-      const { documentId } = await this.upsertEntry(type.uid, p, type.pluralPath, {
+      const { documentId, item } = await this.upsertEntry(type.uid, p, type.pluralPath, {
         restBase: type.restBase,
         single: type.single === true,
       });
@@ -669,11 +796,18 @@ export class Migrator extends EventEmitter {
         kind: "custom",
         wpId: p.id,
         detail: `${type.restBase}/${p.slug} → ${documentId}`,
+        item,
       });
     } catch (err) {
       this.state.recordFailure(`custom:${type.restBase}`, p.id, (err as Error).message);
       await this.state.persist();
-      this.fire({ type: "item-error", kind: "custom", wpId: p.id, message: (err as Error).message });
+      this.fire({
+        type: "item-error",
+        kind: "custom",
+        wpId: p.id,
+        message: (err as Error).message,
+        item: entryInfo(p, type.uid),
+      });
     }
   }
 
@@ -688,7 +822,8 @@ export class Migrator extends EventEmitter {
     this.assertMappingValid();
     await this.state.load();
     await this.resolveRoutes();
-    const limit = Math.max(1, opts.limit ?? 3);
+    const ids = opts.ids && opts.ids.length > 0 ? opts.ids : undefined;
+    const limit = Math.max(1, ids?.length ?? opts.limit ?? 3);
     const kind = opts.kind ?? "posts";
     const items: PreviewItem[] = [];
 
@@ -720,10 +855,10 @@ export class Migrator extends EventEmitter {
 
     const source =
       kind === "pages"
-        ? this.wp.pages(this.cfg.statuses)
+        ? this.wp.pages(this.cfg.statuses, ids)
         : custom
-          ? this.wp.customType(custom.restBase, this.cfg.statuses)
-          : this.wp.posts(this.cfg.statuses);
+          ? this.wp.customType(custom.restBase, this.cfg.statuses, ids)
+          : this.wp.posts(this.cfg.statuses, ids);
     const defaultUid = kind === "pages"
       ? this.cfg.strapi.pageUid
       : (custom?.uid ?? this.cfg.strapi.postUid);
@@ -733,7 +868,8 @@ export class Migrator extends EventEmitter {
       const route = custom ? undefined : this.routeFor(entry, kind === "pages" ? "pages" : "posts");
       const skipped =
         !custom && !route && this.resolvedRoutes.length > 0 && this.cfg.routing.unmatched === "skip";
-      if (skipped) continue;
+      // Asked for by id, a skipped entry is still shown — saying why beats showing nothing.
+      if (skipped && !ids) continue;
       const built = await this.buildEntryData(
         entry,
         kind === "pages" ? "page" : "post",
@@ -748,6 +884,7 @@ export class Migrator extends EventEmitter {
         slug: entry.slug,
         data: built.data,
         notices: built.notices,
+        ...(skipped ? { skipped: true } : {}),
       });
       if (items.length >= limit) break;
     }
@@ -758,6 +895,58 @@ export class Migrator extends EventEmitter {
     return items;
   }
 
+
+  /**
+   * Everything a run would walk for a kind, light enough to list a whole site: no content,
+   * just what identifies each entry and where routing would send it.
+   */
+  async catalogue(opts: CatalogueOptions): Promise<CatalogueEntry[]> {
+    await this.resolveRoutes();
+    const custom =
+      opts.kind === "custom"
+        ? this.cfg.customTypes.find((t) => !opts.restBase || t.restBase === opts.restBase)
+        : undefined;
+    if (opts.kind === "custom" && !custom) throw new Error("No custom type configured to list");
+
+    // Category names make the list filterable; a site that hides them just lists ids-less.
+    const names = new Map<number, string>();
+    if (opts.kind !== "pages") {
+      try {
+        for await (const t of this.wp.terms("categories")) names.set(t.id, decodeEntities(t.name));
+      } catch {
+        /* names are a convenience */
+      }
+    }
+
+    const fields = ["id", "title", "slug", "status", "date", "link", "categories", "tags", "type"];
+    const source =
+      opts.kind === "pages"
+        ? this.wp.pages(this.cfg.statuses, undefined, fields)
+        : custom
+          ? this.wp.customType(custom.restBase, this.cfg.statuses, undefined, fields)
+          : this.wp.posts(this.cfg.statuses, undefined, fields);
+    const defaultUid =
+      opts.kind === "pages" ? this.cfg.strapi.pageUid : (custom?.uid ?? this.cfg.strapi.postUid);
+
+    const out: CatalogueEntry[] = [];
+    for await (const entry of source) {
+      const route = custom ? undefined : this.routeFor(entry, opts.kind === "pages" ? "pages" : "posts");
+      const skipped =
+        !custom && !route && this.resolvedRoutes.length > 0 && this.cfg.routing.unmatched === "skip";
+      out.push({
+        wpId: entry.id,
+        title: decodeEntities(entry.title?.rendered ?? "") || entry.slug,
+        slug: entry.slug,
+        status: entry.status,
+        date: entry.date,
+        link: entry.link,
+        categories: (entry.categories ?? []).map((id) => names.get(id) ?? `#${id}`),
+        uid: skipped ? null : (route?.uid ?? defaultUid),
+        ...(route ? { route: route.name } : {}),
+      });
+    }
+    return out;
+  }
 
   /** Rows for a taxonomy: its own mapping if configured, the term default otherwise. */
   private termMapping(taxonomy: string): FieldMapping[] {
@@ -790,6 +979,7 @@ export class Migrator extends EventEmitter {
 
   private async migrateOneAuthor(user: WpUser, uid: string): Promise<void> {
     if (this.retryFailed && !this.state.failedIds("authors").includes(user.id)) return;
+    const info: ItemDetails = { title: user.name, slug: user.slug, source: user.link, target: uid };
     try {
       const set = this.cfg.mapping ?? {};
       const mapped = applyMapping(user, mergeMappings(set.common, set.author ?? defaultAuthorMapping()), {
@@ -797,11 +987,22 @@ export class Migrator extends EventEmitter {
         strapiBaseUrl: this.cfg.strapi.baseUrl,
       });
       for (const n of mapped.notices) this.say(n);
+      const item: ItemDetails = {
+        ...info,
+        values: summarizeValues(mapped.data),
+        ...(mapped.notices.length > 0 ? { notices: mapped.notices } : {}),
+      };
       if (this.cfg.dryRun) {
-        this.fire({ type: "item-ok", kind: "authors", wpId: user.id, detail: `[dry-run] ${user.slug}` });
+        this.fire({
+          type: "item-ok",
+          kind: "authors",
+          wpId: user.id,
+          detail: `[dry-run] ${user.slug}`,
+          item: { ...item, action: "dry-run" },
+        });
         return;
       }
-      const documentId = await this.upsertRecord(
+      const { documentId, action } = await this.upsertRecord(
         uid,
         this.cfg.strapi.authorPluralPath,
         user.id,
@@ -810,11 +1011,23 @@ export class Migrator extends EventEmitter {
       this.state.setTerm("authors", user.id, documentId);
       this.state.clearFailure("authors", user.id);
       await this.state.persist();
-      this.fire({ type: "item-ok", kind: "authors", wpId: user.id, detail: `${user.slug} → ${documentId}` });
+      this.fire({
+        type: "item-ok",
+        kind: "authors",
+        wpId: user.id,
+        detail: `${user.slug} → ${documentId}`,
+        item: { ...item, action, status: "published", documentId },
+      });
     } catch (err) {
       this.state.recordFailure("authors", user.id, (err as Error).message);
       await this.state.persist();
-      this.fire({ type: "item-error", kind: "authors", wpId: user.id, message: (err as Error).message });
+      this.fire({
+        type: "item-error",
+        kind: "authors",
+        wpId: user.id,
+        message: (err as Error).message,
+        item: info,
+      });
     }
   }
 
@@ -840,6 +1053,12 @@ export class Migrator extends EventEmitter {
 
   private async migrateOneComment(comment: WpComment, uid: string): Promise<void> {
     if (this.retryFailed && !this.state.failedIds("comments").includes(comment.id)) return;
+    const excerpt = summarizeValues({ c: comment.content?.rendered ?? "" }, 60).c;
+    const info: ItemDetails = {
+      title: excerpt ? `${comment.author_name} : ${excerpt}` : comment.author_name,
+      source: comment.link,
+      target: uid,
+    };
     try {
       const set = this.cfg.mapping ?? {};
       const mapped = applyMapping(
@@ -858,15 +1077,23 @@ export class Migrator extends EventEmitter {
           kind: "comments",
           wpId: comment.id,
           reason: `entry ${comment.post} not migrated`,
+          item: info,
         });
         return;
       }
 
+      const item: ItemDetails = { ...info, values: summarizeValues(mapped.data) };
       if (this.cfg.dryRun) {
-        this.fire({ type: "item-ok", kind: "comments", wpId: comment.id, detail: "[dry-run]" });
+        this.fire({
+          type: "item-ok",
+          kind: "comments",
+          wpId: comment.id,
+          detail: "[dry-run]",
+          item: { ...item, action: "dry-run" },
+        });
         return;
       }
-      const documentId = await this.upsertRecord(
+      const { documentId, action } = await this.upsertRecord(
         uid,
         this.cfg.strapi.commentPluralPath,
         comment.id,
@@ -874,11 +1101,23 @@ export class Migrator extends EventEmitter {
       );
       this.state.clearFailure("comments", comment.id);
       await this.state.persist();
-      this.fire({ type: "item-ok", kind: "comments", wpId: comment.id, detail: documentId });
+      this.fire({
+        type: "item-ok",
+        kind: "comments",
+        wpId: comment.id,
+        detail: documentId,
+        item: { ...item, action, status: "published", documentId },
+      });
     } catch (err) {
       this.state.recordFailure("comments", comment.id, (err as Error).message);
       await this.state.persist();
-      this.fire({ type: "item-error", kind: "comments", wpId: comment.id, message: (err as Error).message });
+      this.fire({
+        type: "item-error",
+        kind: "comments",
+        wpId: comment.id,
+        message: (err as Error).message,
+        item: info,
+      });
     }
   }
 
@@ -912,16 +1151,23 @@ export class Migrator extends EventEmitter {
         virtuals: { $items: this.buildMenuTree(items) },
       });
       for (const n of mapped.notices) this.say(n);
+      const item: ItemDetails = {
+        title: menu.name,
+        slug: menu.slug,
+        target: uid,
+        values: summarizeValues(mapped.data),
+      };
       if (this.cfg.dryRun) {
         this.fire({
           type: "item-ok",
           kind: "menus",
           wpId: menu.id,
           detail: `[dry-run] ${menu.slug} (${items.length} items)`,
+          item: { ...item, action: "dry-run" },
         });
         return;
       }
-      const documentId = await this.upsertRecord(
+      const { documentId, action } = await this.upsertRecord(
         uid,
         this.cfg.strapi.menuPluralPath,
         menu.id,
@@ -934,11 +1180,18 @@ export class Migrator extends EventEmitter {
         kind: "menus",
         wpId: menu.id,
         detail: `${menu.slug} (${items.length} items) → ${documentId}`,
+        item: { ...item, action, status: "published", documentId },
       });
     } catch (err) {
       this.state.recordFailure("menus", menu.id, (err as Error).message);
       await this.state.persist();
-      this.fire({ type: "item-error", kind: "menus", wpId: menu.id, message: (err as Error).message });
+      this.fire({
+        type: "item-error",
+        kind: "menus",
+        wpId: menu.id,
+        message: (err as Error).message,
+        item: { title: menu.name, slug: menu.slug, target: uid },
+      });
     }
   }
 
@@ -1060,7 +1313,7 @@ export class Migrator extends EventEmitter {
     pluralOverride: string | undefined,
     wpId: number,
     data: Record<string, unknown>,
-  ): Promise<string> {
+  ): Promise<{ documentId: string; action: WriteAction }> {
     const existing = await this.strapi.findOneBy(
       uid,
       this.cfg.strapi.correlationField,
@@ -1072,7 +1325,7 @@ export class Migrator extends EventEmitter {
           status: "published",
         })
       : await this.strapi.create(uid, data, pluralOverride, { status: "published" });
-    return saved.documentId;
+    return { documentId: saved.documentId, action: existing ? "updated" : "created" };
   }
 
   // ----- Media -----
@@ -1095,26 +1348,42 @@ export class Migrator extends EventEmitter {
 
   private async migrateOneMedia(m: WpMedia): Promise<void> {
     if (this.retryFailed && !this.state.failedIds("media").includes(m.id)) return;
-    if (this.state.get().media[m.id]) {
-      this.fire({ type: "item-skip", kind: "media", wpId: m.id, reason: "already migrated" });
+    const info: ItemDetails = {
+      title: decodeEntities(m.title?.rendered ?? "") || m.slug,
+      source: m.source_url,
+      target: "upload",
+      mime: m.mime_type,
+      ...(m.media_details?.filesize ? { size: m.media_details.filesize } : {}),
+    };
+    const known = this.state.get().media[m.id];
+    if (known) {
+      this.fire({
+        type: "item-skip",
+        kind: "media",
+        wpId: m.id,
+        reason: "already migrated",
+        item: { ...info, mediaId: known.strapiId, url: known.url },
+      });
       return;
     }
     if (!m.source_url) {
-      this.fire({ type: "item-skip", kind: "media", wpId: m.id, reason: "no source_url" });
+      this.fire({ type: "item-skip", kind: "media", wpId: m.id, reason: "no source_url", item: info });
       return;
     }
 
     try {
       const fileName = mediaFileName(m);
+      info.title = fileName;
       if (this.cfg.dryRun) {
         // Check the file is reachable without downloading it: a site's videos alone can weigh GBs.
         const { size } = await this.wp.checkBinary(m.source_url);
-        const known = size ?? m.media_details?.filesize;
+        const bytes = size ?? m.media_details?.filesize;
         this.fire({
           type: "item-ok",
           kind: "media",
           wpId: m.id,
-          detail: `[dry-run] ${fileName}${known !== undefined ? ` (${known}B)` : ""}`,
+          detail: `[dry-run] ${fileName}${bytes !== undefined ? ` (${bytes}B)` : ""}`,
+          item: { ...info, action: "dry-run", ...(bytes !== undefined ? { size: bytes } : {}) },
         });
         return;
       }
@@ -1135,7 +1404,20 @@ export class Migrator extends EventEmitter {
       );
       this.state.clearFailure("media", m.id);
       await this.state.persist();
-      this.fire({ type: "item-ok", kind: "media", wpId: m.id, detail: uploaded.url });
+      this.fire({
+        type: "item-ok",
+        kind: "media",
+        wpId: m.id,
+        detail: uploaded.url,
+        item: {
+          ...info,
+          action: "uploaded",
+          mediaId: uploaded.id,
+          url: uploaded.url,
+          size: buffer.length,
+          mime: contentType || m.mime_type,
+        },
+      });
     } catch (err) {
       this.state.recordFailure("media", m.id, (err as Error).message);
       await this.state.persist();
@@ -1144,6 +1426,7 @@ export class Migrator extends EventEmitter {
         kind: "media",
         wpId: m.id,
         message: (err as Error).message,
+        item: info,
       });
     }
   }
@@ -1158,7 +1441,7 @@ export class Migrator extends EventEmitter {
     });
     const tasks: Promise<void>[] = [];
     let count = 0;
-    for await (const p of this.wp.posts(this.cfg.statuses, this.retryScope("posts"))) {
+    for await (const p of this.wp.posts(this.cfg.statuses, this.scope("posts"))) {
       count += 1;
       tasks.push(this.limit(() => this.migrateOnePost(p)));
     }
@@ -1174,7 +1457,7 @@ export class Migrator extends EventEmitter {
     });
     const tasks: Promise<void>[] = [];
     let count = 0;
-    for await (const p of this.wp.pages(this.cfg.statuses, this.retryScope("pages"))) {
+    for await (const p of this.wp.pages(this.cfg.statuses, this.scope("pages"))) {
       count += 1;
       tasks.push(this.limit(() => this.migrateOnePage(p)));
     }
@@ -1329,23 +1612,30 @@ export class Migrator extends EventEmitter {
       single?: boolean;
       routeName?: string;
     } = {},
-  ): Promise<{ documentId: string }> {
+  ): Promise<{ documentId: string; item: ItemDetails }> {
     const { kind = "post", restBase, single = false, routeName } = opts;
     const { data, notices } = await this.buildEntryData(p, kind, restBase, routeName);
     for (const n of notices) this.say(n);
-    if (this.cfg.dryRun) {
-      return { documentId: "dry-run" };
-    }
     // Strapi v5 publishes by `status`; a `publishedAt` in the payload is stripped and the
     // write defaults to a draft. Anything not published in WordPress stays a draft here.
-    const write: WriteOptions = {
-      status: p.status === "publish" ? "published" : "draft",
-      ...(single ? { single: true } : {}),
+    const status = p.status === "publish" ? "published" : "draft";
+    const item: ItemDetails = {
+      ...entryInfo(p, uid, routeName),
+      status,
+      values: summarizeValues(data),
+      ...(notices.length > 0 ? { notices } : {}),
     };
+    if (this.cfg.dryRun) {
+      return { documentId: "dry-run", item: { ...item, action: "dry-run" } };
+    }
+    const write: WriteOptions = { status, ...(single ? { single: true } : {}) };
     // A single type holds one document: there is nothing to look up, and PUT replaces it.
     if (single) {
       const saved = await this.strapi.create(uid, data, pluralOverride, write);
-      return { documentId: saved.documentId };
+      return {
+        documentId: saved.documentId,
+        item: { ...item, action: "updated", documentId: saved.documentId },
+      };
     }
     const existing = await this.strapi.findOneBy(
       uid,
@@ -1353,18 +1643,17 @@ export class Migrator extends EventEmitter {
       p.id,
       pluralOverride,
     );
-    if (existing) {
-      const updated = await this.strapi.update(
-        uid,
-        existing.documentId,
-        data,
-        pluralOverride,
-        write,
-      );
-      return { documentId: updated.documentId };
-    }
-    const created = await this.strapi.create(uid, data, pluralOverride, write);
-    return { documentId: created.documentId };
+    const saved = existing
+      ? await this.strapi.update(uid, existing.documentId, data, pluralOverride, write)
+      : await this.strapi.create(uid, data, pluralOverride, write);
+    return {
+      documentId: saved.documentId,
+      item: {
+        ...item,
+        action: existing ? "updated" : "created",
+        documentId: saved.documentId,
+      },
+    };
   }
 
   private async migrateOnePost(p: WpPost): Promise<void> {
@@ -1385,7 +1674,13 @@ export class Migrator extends EventEmitter {
   private async migrateRoutedEntry(p: WpPost | WpPage, from: "posts" | "pages"): Promise<void> {
     const route = this.routeFor(p, from);
     if (!route && this.resolvedRoutes.length > 0 && this.cfg.routing.unmatched === "skip") {
-      this.fire({ type: "item-skip", kind: from, wpId: p.id, reason: "no route matches" });
+      this.fire({
+        type: "item-skip",
+        kind: from,
+        wpId: p.id,
+        reason: "no route matches",
+        item: entryInfo(p),
+      });
       return;
     }
 
@@ -1396,7 +1691,7 @@ export class Migrator extends EventEmitter {
         : { uid: this.cfg.strapi.pageUid, plural: this.cfg.strapi.pagePluralPath };
 
     try {
-      const { documentId } = await this.upsertEntry(target.uid, p, target.plural, {
+      const { documentId, item } = await this.upsertEntry(target.uid, p, target.plural, {
         kind: from === "posts" ? "post" : "page",
         routeName: route?.name,
       });
@@ -1414,11 +1709,18 @@ export class Migrator extends EventEmitter {
         kind: from,
         wpId: p.id,
         detail: route ? `${p.slug} → [${route.name}] ${documentId}` : `${p.slug} → ${documentId}`,
+        item,
       });
     } catch (err) {
       this.state.recordFailure(from, p.id, (err as Error).message);
       await this.state.persist();
-      this.fire({ type: "item-error", kind: from, wpId: p.id, message: (err as Error).message });
+      this.fire({
+        type: "item-error",
+        kind: from,
+        wpId: p.id,
+        message: (err as Error).message,
+        item: entryInfo(p, target.uid, route?.name),
+      });
     }
   }
 }

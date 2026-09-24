@@ -91,6 +91,14 @@ export const MigrationConfigSchema = z.object({
     .default(["media", "posts", "pages"]),
   /** Re-run only what the previous run recorded as failed. */
   retryFailed: z.boolean().default(false),
+  /** WordPress ids to import per kind; a kind left out imports everything. */
+  selection: z
+    .object({
+      posts: z.array(z.number().int()).optional(),
+      pages: z.array(z.number().int()).optional(),
+      custom: z.record(z.array(z.number().int())).optional(),
+    })
+    .default({}),
 });
 
 export type MigrationConfigInput = z.infer<typeof MigrationConfigSchema>;

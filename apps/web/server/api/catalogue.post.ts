@@ -3,23 +3,20 @@ import { z } from "zod";
 import { MigrationConfigSchema } from "../../shared/schema";
 
 const Body = MigrationConfigSchema.extend({
-  kind: z.enum(["posts", "pages", "categories", "tags", "custom"]).default("posts"),
+  kind: z.enum(["posts", "pages", "custom"]),
   restBase: z.string().optional(),
-  limit: z.number().int().min(1).max(10).default(3),
-  /** Preview these entries rather than the first few. */
-  ids: z.array(z.number().int()).max(10).optional(),
 });
 
-/** Render what a run would write, without writing anything. */
+/** Every entry a run would walk for a kind, with where it would land — to pick from. */
 export default defineEventHandler(async (event) => {
   const parsed = Body.safeParse(await readBody(event));
   if (!parsed.success) {
     throw createError({ statusCode: 400, statusMessage: parsed.error.message });
   }
-  const { kind, restBase, limit, ids, retryFailed: _retryFailed, ...config } = parsed.data;
+  const { kind, restBase, retryFailed: _retryFailed, ...config } = parsed.data;
   try {
     const migrator = new Migrator(buildConfig(config));
-    return { items: await migrator.preview({ kind, restBase, limit, ids }) };
+    return { entries: await migrator.catalogue({ kind, restBase }) };
   } catch (err) {
     throw createError({ statusCode: 422, statusMessage: (err as Error).message });
   }

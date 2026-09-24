@@ -23,9 +23,12 @@ export interface WordPressClientOptions {
   onRetry?: (attempt: number, delayMs: number, reason: string) => void;
 }
 
-/** `include` narrows a listing to specific ids — how a retry fetches only what failed. */
-function includeQuery(include?: ReadonlyArray<number>): Record<string, string> {
-  return include && include.length > 0 ? { include: include.join(",") } : {};
+/** WordPress caps `include` at `per_page` ids, and long URLs trip proxies: ask in batches. */
+const INCLUDE_BATCH = 100;
+
+/** `_fields` trims each entry to what the caller reads — a listing without content is tiny. */
+function fieldsQuery(fields?: ReadonlyArray<string>): Record<string, string> {
+  return fields && fields.length > 0 ? { _fields: fields.join(",") } : {};
 }
 
 /**
@@ -260,24 +263,48 @@ export class WordPressClient {
     return { posts: posts.total, pages: pages.total, media: media.total };
   }
 
+  /**
+   * A listing, optionally narrowed to some ids (`include`) — how a retry or a selection fetches
+   * only what it needs. An empty `include` yields nothing: WordPress would read `include=`
+   * as no filter at all, and a placeholder like `-1` as id 1 (it takes absolute values).
+   */
+  private async *listing<T>(
+    path: string,
+    query: Record<string, string | number | undefined>,
+    include?: ReadonlyArray<number>,
+  ): AsyncGenerator<T> {
+    if (!include) {
+      yield* this.paginate<T>(path, query);
+      return;
+    }
+    for (let i = 0; i < include.length; i += INCLUDE_BATCH) {
+      const batch = include.slice(i, i + INCLUDE_BATCH).join(",");
+      yield* this.paginate<T>(path, { ...query, include: batch });
+    }
+  }
+
   posts(
     statuses: ReadonlyArray<string> = ["publish"],
     include?: ReadonlyArray<number>,
+    fields?: ReadonlyArray<string>,
   ): AsyncGenerator<WpPost> {
-    return this.paginate<WpPost>("/posts", {
-      status: statuses.join(","),
-      ...includeQuery(include),
-    });
+    return this.listing<WpPost>(
+      "/posts",
+      { status: statuses.join(","), ...fieldsQuery(fields) },
+      include,
+    );
   }
 
   pages(
     statuses: ReadonlyArray<string> = ["publish"],
     include?: ReadonlyArray<number>,
+    fields?: ReadonlyArray<string>,
   ): AsyncGenerator<WpPage> {
-    return this.paginate<WpPage>("/pages", {
-      status: statuses.join(","),
-      ...includeQuery(include),
-    });
+    return this.listing<WpPage>(
+      "/pages",
+      { status: statuses.join(","), ...fieldsQuery(fields) },
+      include,
+    );
   }
 
   /** Any custom post type exposed under its REST base, e.g. `portfolio`. */
@@ -285,11 +312,13 @@ export class WordPressClient {
     restBase: string,
     statuses: ReadonlyArray<string> = ["publish"],
     include?: ReadonlyArray<number>,
+    fields?: ReadonlyArray<string>,
   ): AsyncGenerator<WpPost> {
-    return this.paginate<WpPost>(`/${restBase.replace(/^\/+/, "")}`, {
-      status: statuses.join(","),
-      ...includeQuery(include),
-    });
+    return this.listing<WpPost>(
+      `/${restBase.replace(/^\/+/, "")}`,
+      { status: statuses.join(","), ...fieldsQuery(fields) },
+      include,
+    );
   }
 
   /** Terms of a taxonomy (`categories`, `tags`, or a custom taxonomy's REST base). */

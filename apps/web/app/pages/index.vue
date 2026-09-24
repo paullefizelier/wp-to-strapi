@@ -81,6 +81,7 @@ const items: StepperItem[] = [
   { title: "Source", description: "WordPress", icon: "i-lucide-globe", slot: "source" },
   { title: "Destination", description: "Strapi v5", icon: "i-lucide-database", slot: "destination" },
   { title: "Mapping", description: "Champs", icon: "i-lucide-arrow-left-right", slot: "mapping" },
+  { title: "Sélection", description: "Quoi importer", icon: "i-lucide-list-checks", slot: "selection" },
   { title: "Lancement", description: "Portée et options", icon: "i-lucide-play", slot: "run" },
 ];
 
@@ -118,6 +119,16 @@ const wpReady = computed(() => Boolean(config.value.wp.baseUrl) && !wpUrlError.v
 const strapiReady = computed(
   () => Boolean(config.value.strapi.baseUrl && config.value.strapi.token) && !strapiUrlError.value,
 );
+/** "12 articles, 3 pages" — what a manual selection narrows the run to. */
+const selectionSummary = computed(() => {
+  const sel = config.value.selection ?? {};
+  const parts: string[] = [];
+  if (sel.posts) parts.push(`${sel.posts.length} article(s)`);
+  if (sel.pages) parts.push(`${sel.pages.length} page(s)`);
+  for (const [restBase, ids] of Object.entries(sel.custom ?? {})) parts.push(`${ids.length} ${restBase}`);
+  return parts.length ? `Seules ces entrées partiront : ${parts.join(", ")}. Les autres types sont importés en entier.` : "";
+});
+
 const canStart = computed(() => wpReady.value && strapiReady.value && config.value.only.length > 0);
 
 /** CPTs are edited as `restBase:api::uid.uid[|pluralPath]`, one per line. */
@@ -497,9 +508,24 @@ async function startMigration() {
         </div>
       </template>
 
-      <!-- 4 · Portée et lancement -->
+      <template #selection>
+        <div class="mt-6">
+          <SelectionStep />
+        </div>
+      </template>
+
+      <!-- 5 · Portée et lancement -->
       <template #run>
         <div class="mt-6 space-y-4">
+          <UAlert
+            v-if="selectionSummary"
+            color="info"
+            variant="subtle"
+            icon="i-lucide-list-checks"
+            title="Sélection manuelle active"
+            :description="selectionSummary"
+            :actions="[{ label: 'Modifier', color: 'neutral', variant: 'subtle', onClick: () => { step = 3 } }]"
+          />
           <UCard>
             <template #header>
               <h2 class="font-semibold text-highlighted">Contenus à migrer</h2>

@@ -40,6 +40,7 @@ export interface WpTerm {
   count?: number;
   parent?: number;
   taxonomy?: string;
+  link?: string;
 }
 
 /** A WordPress author. */

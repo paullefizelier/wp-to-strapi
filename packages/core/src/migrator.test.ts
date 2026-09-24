@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildConfig } from "./config.js";
 import { describeNotice, NOTICE_CODES } from "./notices.js";
-import { mediaFileName, Migrator, type MigratorEvent } from "./migrator.js";
+import { mediaFileName, Migrator, summarizeValues, type MigratorEvent } from "./migrator.js";
 import type { StrapiAdapter } from "./strapi-adapter.js";
 import type { MigrationState } from "./state.js";
 import type { WordPressClient } from "./wordpress-client.js";
@@ -878,5 +878,169 @@ describe("mediaFileName", () => {
   it("keeps a name that is already fine, or not decodable", () => {
     expect(mediaFileName({ source_url: `${WP}/u/logo.png`, mime_type: "image/png" })).toBe("logo.png");
     expect(mediaFileName({ source_url: `${WP}/u/bad%E0.png`, mime_type: "image/png" })).toBe("bad%E0.png");
+  });
+});
+
+describe("Import details", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function items(over: Record<string, unknown> = {}, strapi = fakeStrapi()) {
+    const events: MigratorEvent[] = [];
+    const migrator = new Migrator(
+      buildConfig({
+        wp: { baseUrl: WP },
+        strapi: { baseUrl: "https://cms.example.com", token: "t", categoryUid: "api::category.category" },
+        stateFile: join(dir, "state.json"),
+        concurrency: 1,
+        ...over,
+      }),
+      { strapi: strapi.adapter, wp: fakeWp().wp },
+    );
+    migrator.on("event", (e) => events.push(e));
+    await migrator.run({ only: ["media", "categories", "posts"] });
+    return events.flatMap((e) =>
+      e.type === "item-ok" || e.type === "item-skip" || e.type === "item-error"
+        ? [{ kind: e.kind, wpId: e.wpId, type: e.type, item: e.item }]
+        : [],
+    );
+  }
+
+  it("says what each entry is, where it went and what was written", async () => {
+    const all = await items();
+    const post = all.find((i) => i.kind === "posts" && i.wpId === 1)?.item;
+    expect(post).toMatchObject({
+      title: "Cafés & co",
+      slug: "with-image",
+      source: `${WP}/with-image/`,
+      wpStatus: "publish",
+      target: "api::post.post",
+      action: "created",
+      status: "published",
+      documentId: expect.stringMatching(/^doc-/),
+    });
+    expect(post?.values?.title).toBe("Cafés & co");
+    const draft = all.find((i) => i.kind === "posts" && i.wpId === 2)?.item;
+    expect(draft).toMatchObject({ wpStatus: "draft", status: "draft" });
+
+    expect(all.find((i) => i.kind === "media")?.item).toMatchObject({
+      title: "photo.jpg",
+      source: MEDIA.source_url,
+      target: "upload",
+      action: "uploaded",
+      mediaId: 101,
+      url: "/uploads/photo_hash.jpg",
+      size: "jpeg-bytes".length,
+      mime: "image/jpeg",
+    });
+    expect(all.find((i) => i.kind === "categories")?.item).toMatchObject({
+      target: "api::category.category",
+      action: "created",
+    });
+  });
+
+  it("tells an update from a creation", async () => {
+    const strapi = fakeStrapi();
+    strapi.adapter.findOneBy = async () => ({ id: 9, documentId: "existing" });
+    const post = (await items({}, strapi)).find((i) => i.kind === "posts")?.item;
+    expect(post).toMatchObject({ action: "updated", documentId: "existing" });
+  });
+
+  it("marks dry-run entries as such, with the payload they would have sent", async () => {
+    const all = await items({ dryRun: true });
+    const post = all.find((i) => i.kind === "posts")?.item;
+    expect(post?.action).toBe("dry-run");
+    expect(post?.documentId).toBeUndefined();
+    expect(post?.values).toHaveProperty("slug", "with-image");
+  });
+});
+
+describe("summarizeValues", () => {
+  it("flattens HTML, keeps scalars and shortens structures", () => {
+    const out = summarizeValues(
+      {
+        content: "<p>Bonjour&nbsp;<strong>tout</strong> le monde</p>",
+        views: 3,
+        featured: false,
+        cover: null,
+        blocks: [{ __component: "shared.rich-text", body: "x".repeat(400) }],
+      },
+      40,
+    );
+    expect(out.content).toBe("Bonjour tout le monde");
+    expect(out.views).toBe("3");
+    expect(out.featured).toBe("false");
+    expect(out.cover).toBe("");
+    expect(out.blocks).toHaveLength(40);
+    expect(out.blocks?.endsWith("…")).toBe(true);
+  });
+});
+
+describe("Selection", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function migrator(over: Record<string, unknown>, wp = fakeWp(), strapi = fakeStrapi()) {
+    const m = new Migrator(
+      buildConfig({
+        wp: { baseUrl: WP },
+        strapi: { baseUrl: "https://cms.example.com", token: "t", categoryUid: "api::category.category" },
+        stateFile: join(dir, "state.json"),
+        concurrency: 1,
+        ...over,
+      }),
+      { strapi: strapi.adapter, wp: wp.wp },
+    );
+    return { m, wp, strapi };
+  }
+
+  it("asks WordPress only for the selected entries, and counts them for progress", async () => {
+    const { m, wp } = migrator({ selection: { posts: [1] } });
+    const events: MigratorEvent[] = [];
+    m.on("event", (e) => events.push(e));
+    await m.run({ only: ["posts"] });
+    expect(wp.calls.include).toEqual(["1"]);
+    const start = events.find((e) => e.type === "section-start" && e.kind === "posts");
+    expect(start).toMatchObject({ expected: 1 });
+  });
+
+  it("leaves unselected kinds untouched", async () => {
+    const { m, wp } = migrator({ selection: { pages: [20] } });
+    await m.run({ only: ["posts"] });
+    expect(wp.calls.include).toEqual([]);
+  });
+
+  it("lists entries with where routing would send them", async () => {
+    const { m } = migrator({
+      routing: { routes: [{ name: "blog", categories: [3], uid: "api::blog.blog" }], unmatched: "skip" },
+    });
+    const list = await m.catalogue({ kind: "posts" });
+    expect(list.map((e) => [e.wpId, e.uid, e.route ?? null])).toEqual([
+      [1, "api::blog.blog", "blog"],
+      [2, null, null],
+    ]);
+    expect(list[0]).toMatchObject({ title: "Cafés & co", slug: "with-image", status: "publish" });
+  });
+
+  it("previews chosen ids, including one routing would skip", async () => {
+    const { m, wp } = migrator({
+      routing: { routes: [{ name: "blog", categories: [3], uid: "api::blog.blog" }], unmatched: "skip" },
+    });
+    const items = await m.preview({ kind: "posts", ids: [1, 2] });
+    expect(wp.calls.include).toContain("1,2");
+    expect(items.map((i) => [i.wpId, i.skipped ?? false])).toEqual([
+      [1, false],
+      [2, true],
+    ]);
   });
 });

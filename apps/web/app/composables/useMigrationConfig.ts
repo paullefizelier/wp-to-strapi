@@ -22,6 +22,7 @@ const empty = (): MigrationConfigInput => ({
   mapping: {},
   only: ["media", "posts", "pages"],
   retryFailed: false,
+  selection: {},
 });
 
 /**
@@ -31,29 +32,35 @@ const empty = (): MigrationConfigInput => ({
  */
 export function useMigrationConfig() {
   const cfg = useState<MigrationConfigInput>("migration-config", empty);
+  const hydrated = useState("migration-config-hydrated", () => false);
 
-  if (import.meta.client) {
-    // Hydrate from localStorage once.
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw) as Partial<MigrationConfigInput>;
-        cfg.value = { ...empty(), ...parsed };
-      } catch {
-        // ignore
-      }
-    }
-    watch(
-      cfg,
-      (v) => {
+  // Read the saved config only once the page is hydrated: reading it during setup makes the
+  // client render differ from the server's, and Vue then keeps stale attributes (a launch
+  // button stuck disabled). Once per app, however many components call this.
+  if (import.meta.client && !hydrated.value) {
+    hydrated.value = true;
+    onNuxtReady(() => {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) {
         try {
-          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(v));
+          const parsed = JSON.parse(raw) as Partial<MigrationConfigInput>;
+          cfg.value = { ...empty(), ...parsed };
         } catch {
-          // storage quota / privacy mode — silently ignore
+          // ignore
         }
-      },
-      { deep: true },
-    );
+      }
+      watch(
+        cfg,
+        (v) => {
+          try {
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(v));
+          } catch {
+            // storage quota / privacy mode — silently ignore
+          }
+        },
+        { deep: true },
+      );
+    });
   }
 
   function reset() {

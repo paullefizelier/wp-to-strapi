@@ -6,13 +6,17 @@ export type {
   CustomTypeConfig,
   RouteConfig,
   RoutingConfig,
+  SelectionConfig,
   TaxonomyConfig,
 } from "./config.js";
 export { WordPressClient } from "./wordpress-client.js";
 export { StrapiClient } from "./strapi-client.js";
 export type { StrapiAdapter, WriteOptions } from "./strapi-adapter.js";
-export { Migrator } from "./migrator.js";
+export { Migrator, summarizeValues } from "./migrator.js";
 export type {
+  CatalogueEntry,
+  CatalogueOptions,
+  ItemDetails,
   Kind,
   MigrateOptions,
   MigratorDeps,

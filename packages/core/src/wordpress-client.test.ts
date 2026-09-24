@@ -156,3 +156,31 @@ describe("Redirect chains", () => {
     expect(calls.some((c) => c.url.includes("blog.test.evil"))).toBe(false);
   });
 });
+
+describe("Narrowed listings", () => {
+  async function drain(gen: AsyncGenerator<unknown>) {
+    for await (const _ of gen) {
+      /* consume */
+    }
+  }
+
+  it("asks for nothing when the selection is empty — never `include=` or `-1`", async () => {
+    const wp = withAuth("https://blog.test");
+    await drain(wp.posts(["publish"], []));
+    expect(calls).toHaveLength(0);
+  });
+
+  it("splits a long selection into batches WordPress accepts", async () => {
+    const wp = withAuth("https://blog.test");
+    const ids = Array.from({ length: 250 }, (_, i) => i + 1);
+    await drain(wp.posts(["publish"], ids));
+    const includes = calls.map((c) => new URL(c.url).searchParams.get("include")?.split(",").length);
+    expect(includes).toEqual([100, 100, 50]);
+  });
+
+  it("trims entries to the requested fields", async () => {
+    const wp = withAuth("https://blog.test");
+    await drain(wp.pages(["publish"], undefined, ["id", "title"]));
+    expect(new URL(calls[0]!.url).searchParams.get("_fields")).toBe("id,title");
+  });
+});
