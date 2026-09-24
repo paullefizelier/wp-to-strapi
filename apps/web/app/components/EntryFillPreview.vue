@@ -153,7 +153,7 @@ const STATE_UI: Record<RowState, { icon: string; class: string }> = {
               <template v-if="row.field.repeatable"> ×n</template>
             </UBadge>
             <UBadge
-              v-if="aiFields?.includes(row.name)"
+              v-if="aiFields?.some((f) => f === row.name || f.startsWith(`${row.name}.`))"
               color="primary"
               variant="subtle"
               size="sm"

@@ -3,6 +3,13 @@ import { writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import pLimit from "p-limit";
 import type { AppConfig, CustomTypeConfig, RouteConfig } from "./config.js";
+import {
+  aiCacheKey,
+  buildAiRequest,
+  GeminiClient,
+  readAiAnswer,
+  type AiRule,
+} from "./ai.js";
 import { extractReadableContent } from "./content-extract.js";
 import {
   buildSourceMatcher,
@@ -22,6 +29,7 @@ import {
   defaultTermMapping,
   mergeMappings,
   readPath,
+  setPath,
   validateMapping,
   type FieldMapping,
 } from "./mapping.js";
@@ -144,6 +152,8 @@ export interface ItemDetails {
   mime?: string;
   /** Written fields, each value shortened to a readable one-liner. */
   values?: Record<string, string>;
+  /** Fields the AI assistant filled. */
+  ai?: string[];
   /** Warnings raised for this entry (also emitted as log events). */
   notices?: Notice[];
 }
@@ -234,6 +244,8 @@ export interface PreviewItem {
    * those steps have run.
    */
   pending?: Record<string, string>;
+  /** Fields the AI assistant filled. */
+  aiFields?: string[];
 }
 
 export interface PreviewOptions {
@@ -276,11 +288,16 @@ export interface MigratorDeps {
    */
   strapi?: StrapiAdapter;
   wp?: WordPressClient;
+  /** Replaces the Gemini client — tests, or another provider behind the same call. */
+  ai?: Pick<GeminiClient, "generateJson">;
 }
 
 export class Migrator extends EventEmitter {
   private readonly wp: WordPressClient;
   private readonly strapi: StrapiAdapter;
+  private ai: Pick<GeminiClient, "generateJson"> | undefined;
+  /** Category and tag names, for the AI's context. Loaded once, on first use. */
+  private termNames: Promise<Map<string, string>> | undefined;
   private readonly state: StateStore;
   private readonly limit: ReturnType<typeof pLimit>;
   private retryFailed = false;
@@ -314,6 +331,7 @@ export class Migrator extends EventEmitter {
         onRetry: (attempt, delayMs, reason) => this.reportRetry("Strapi", attempt, delayMs, reason),
       });
     this.state = new StateStore(cfg.stateFile, { readOnly: cfg.dryRun });
+    this.ai = deps.ai;
     this.limit = pLimit(cfg.concurrency);
   }
 
@@ -903,6 +921,7 @@ export class Migrator extends EventEmitter {
         notices: built.notices,
         ...(skipped ? { skipped: true } : {}),
         ...(Object.keys(pending).length > 0 ? { pending } : {}),
+        ...(built.aiFields.length > 0 ? { aiFields: built.aiFields } : {}),
       });
       if (items.length >= limit) break;
     }
@@ -1664,7 +1683,7 @@ export class Migrator extends EventEmitter {
     kind: "post" | "page",
     restBase?: string,
     routeName?: string,
-  ): Promise<{ data: Record<string, unknown>; notices: Notice[] }> {
+  ): Promise<{ data: Record<string, unknown>; notices: Notice[]; aiFields: string[] }> {
     const resolved = await this.resolveContent(p);
     const state = this.state.get();
     const mapped = applyMapping(p, this.mappingFor(kind, restBase, routeName), {
@@ -1680,14 +1699,107 @@ export class Migrator extends EventEmitter {
     });
 
     const rewritten = rewriteMediaUrls(resolved.html, state, this.cfg.strapi.baseUrl);
+    const ai = await this.applyAi(p, resolved.html, mapped.data, this.aiRulesFor(kind, restBase, routeName));
     return {
       data: mapped.data,
       notices: [
         ...resolved.notices,
         ...mapped.notices,
+        ...ai.notices,
         ...this.auditContent(p, resolved.html, rewritten),
       ],
+      aiFields: ai.filled,
     };
+  }
+
+  // ----- AI assistant -----
+
+  /** The rules that apply to an entry: `*` plus its own mapping key's. */
+  private aiRulesFor(kind: "post" | "page", restBase?: string, routeName?: string): AiRule[] {
+    const rules = this.cfg.ai?.rules ?? {};
+    const key = routeName ? `route:${routeName}` : restBase ? `custom:${restBase}` : kind;
+    return [...(rules["*"] ?? []), ...(rules[key] ?? [])].filter((r) => r.target && r.instruction);
+  }
+
+  private async names(): Promise<Map<string, string>> {
+    this.termNames ??= (async () => {
+      const out = new Map<string, string>();
+      for (const taxonomy of ["categories", "tags"]) {
+        try {
+          for await (const t of this.wp.terms(taxonomy)) out.set(`${taxonomy}:${t.id}`, decodeEntities(t.name));
+        } catch {
+          /* context only */
+        }
+      }
+      return out;
+    })();
+    return this.termNames;
+  }
+
+  /**
+   * Ask the assistant for the fields its rules name, and write the answers into `data`. A rule
+   * without `overwrite` leaves a field the mapping already filled alone. Never fails the entry:
+   * a failed call is a notice, and the entry goes without those fields.
+   */
+  private async applyAi(
+    p: WpPost | WpPage,
+    html: string,
+    data: Record<string, unknown>,
+    allRules: AiRule[],
+  ): Promise<{ filled: string[]; notices: Notice[] }> {
+    const cfg = this.cfg.ai;
+    const rules = allRules.filter((r) => {
+      if (r.overwrite) return true;
+      const current = readPath(data, r.target);
+      return current === undefined || current === null || current === "" ||
+        (Array.isArray(current) && current.length === 0);
+    });
+    if (!cfg || rules.length === 0) return { filled: [], notices: [] };
+    const label = `${p.type ?? "entry"} "${p.slug}" (wpId ${p.id})`;
+    try {
+      const names = await this.names();
+      const req = buildAiRequest(
+        {
+          title: decodeEntities(p.title?.rendered ?? ""),
+          slug: p.slug,
+          link: p.link,
+          date: p.date,
+          status: p.status,
+          excerpt: summarizeValues({ e: p.excerpt?.rendered ?? "" }, 2000).e,
+          content: html,
+          categories: (p.categories ?? []).map((id) => names.get(`categories:${id}`) ?? `#${id}`),
+          tags: (p.tags ?? []).map((id) => names.get(`tags:${id}`) ?? `#${id}`),
+        },
+        rules,
+        cfg,
+      );
+      const entryKey = `${p.type ?? "entry"}:${p.id}`;
+      const cacheKey = aiCacheKey(cfg.model, req);
+      let values = this.state.aiAnswer(entryKey, cacheKey);
+      if (!values) {
+        this.ai ??= new GeminiClient(cfg.apiKey, {
+          retries: this.cfg.retries,
+          onRetry: (attempt, delayMs, reason) => this.reportRetry("Gemini", attempt, delayMs, reason),
+        });
+        values = readAiAnswer(await this.ai.generateJson(cfg.model, req), rules).values;
+        this.state.setAiAnswer(entryKey, cacheKey, values);
+      }
+      const state = this.state.get();
+      const filled: string[] = [];
+      for (const rule of rules) {
+        if (!(rule.target in values)) continue;
+        let value = values[rule.target];
+        // Images the model kept in generated HTML still point at WordPress: move them too.
+        if (rule.type === "html" && typeof value === "string") {
+          value = rewriteMediaUrls(value, state, this.cfg.strapi.baseUrl);
+        }
+        setPath(data, rule.target, value);
+        filled.push(rule.target);
+      }
+      return { filled, notices: [] };
+    } catch (err) {
+      return { filled: [], notices: [notice("ai.failed", { entry: label, error: (err as Error).message })] };
+    }
   }
 
   /**
@@ -1757,7 +1869,7 @@ export class Migrator extends EventEmitter {
     } = {},
   ): Promise<{ documentId: string; item: ItemDetails }> {
     const { kind = "post", restBase, single = false, routeName } = opts;
-    const { data, notices } = await this.buildEntryData(p, kind, restBase, routeName);
+    const { data, notices, aiFields } = await this.buildEntryData(p, kind, restBase, routeName);
     for (const n of notices) this.say(n);
     // Strapi v5 publishes by `status`; a `publishedAt` in the payload is stripped and the
     // write defaults to a draft. Anything not published in WordPress stays a draft here.
@@ -1767,6 +1879,7 @@ export class Migrator extends EventEmitter {
       status,
       values: summarizeValues(data),
       ...(notices.length > 0 ? { notices } : {}),
+      ...(aiFields.length > 0 ? { ai: aiFields } : {}),
     };
     if (this.cfg.dryRun) {
       return { documentId: "dry-run", item: { ...item, action: "dry-run" } };

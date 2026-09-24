@@ -91,6 +91,27 @@ export const MigrationConfigSchema = z.object({
     .default(["media", "posts", "pages"]),
   /** Re-run only what the previous run recorded as failed. */
   retryFailed: z.boolean().default(false),
+  /** Gemini fills fields from each entry's content. */
+  ai: z
+    .object({
+      provider: z.literal("gemini").default("gemini"),
+      apiKey: z.string().optional(),
+      model: z.string().min(1),
+      instructions: z.string().optional(),
+      maxContentChars: z.number().int().positive().max(500_000).optional(),
+      rules: z.record(
+        z.array(
+          z.object({
+            target: z.string().min(1),
+            instruction: z.string().min(1),
+            type: z.enum(["string", "html", "number", "boolean", "enum", "json", "string[]"]).optional(),
+            options: z.array(z.string()).optional(),
+            overwrite: z.boolean().optional(),
+          }),
+        ),
+      ),
+    })
+    .optional(),
   /** `used`: only the files the imported entries point at. */
   mediaScope: z.enum(["all", "used"]).default("all"),
   /** WordPress ids to import per kind; a kind left out imports everything. */

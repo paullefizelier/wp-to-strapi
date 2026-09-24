@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   buildConfig,
   Migrator,
+  type AiConfig,
   type CustomTypeConfig,
   type Kind,
   type MigrateOptions,
@@ -56,6 +57,21 @@ function loadRouting(path: string | undefined): Partial<RoutingConfig> | undefin
     return Array.isArray(parsed) ? { routes: parsed } : parsed;
   } catch (err) {
     throw new Error(`Cannot read ROUTES_FILE "${path}": ${(err as Error).message}`);
+  }
+}
+
+/**
+ * AI_FILE=./ai.json — `{ "model": "...", "instructions": "...", "rules": { "post": [...] } }`.
+ * The key comes from GEMINI_API_KEY, never from the file.
+ */
+function loadAi(path: string | undefined): AiConfig | undefined {
+  if (!path) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<AiConfig>;
+    if (!parsed.model) throw new Error('"model" is required');
+    return { provider: "gemini", rules: {}, ...parsed, model: parsed.model };
+  } catch (err) {
+    throw new Error(`Cannot read AI_FILE "${path}": ${(err as Error).message}`);
   }
 }
 
@@ -122,6 +138,7 @@ function loadConfigFromEnv() {
     routing: loadRouting(process.env.ROUTES_FILE),
     redirectsFile: process.env.REDIRECTS_FILE,
     mediaScope: process.env.MEDIA_SCOPE === "used" ? "used" : undefined,
+    ai: loadAi(process.env.AI_FILE),
   });
 }
 

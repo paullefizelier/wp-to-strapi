@@ -394,6 +394,9 @@ function exportJson() {
             <UBadge v-if="selected.item?.route" color="primary" variant="outline">
               route {{ selected.item.route }}
             </UBadge>
+            <UBadge v-if="selected.item?.ai?.length" color="primary" variant="subtle" icon="i-lucide-sparkles">
+              IA : {{ selected.item.ai.join(", ") }}
+            </UBadge>
           </div>
 
           <UAlert

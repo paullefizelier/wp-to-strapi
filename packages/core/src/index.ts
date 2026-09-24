@@ -25,6 +25,8 @@ export type {
   PreviewOptions,
 } from "./migrator.js";
 export { withRetry, parseRetryAfter, HttpStatusError } from "./retry.js";
+export { GeminiClient, buildAiRequest, readAiAnswer } from "./ai.js";
+export type { AiConfig, AiRule, AiSource, GeminiModel } from "./ai.js";
 export type { RetryOptions } from "./retry.js";
 export {
   buildMediaIndex,

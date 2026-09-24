@@ -505,6 +505,7 @@ async function startMigration() {
         <div class="mt-6 space-y-4">
           <RoutingEditor :content-types="contentTypes" />
           <FieldMapper />
+          <AiAssistant />
         </div>
       </template>
 

@@ -346,6 +346,7 @@ are never touched. Turn it off with `HTML_FALLBACK=false` (CLI) or the toggle in
 | **Navigation menus** | `STRAPI_MENU_UID` (needs WordPress credentials). One entry per menu, items as a nested JSON tree where each item carries the `documentId` of what it points at. |
 | **Redirects** | `REDIRECTS_FILE=./redirects.json`. Every entry records its old WordPress path, so nothing 404s once the old site is gone. Kept in the state file either way. |
 | **Only the media in use** | `MEDIA_SCOPE=used` (or the switch in the UI). Migrates the files the imported entries point at — featured image, images in the content (size variants and `-scaled` originals included), Gutenberg `wp-image-N` ids, and fields mapped through `mediaId`/`mediaUrl` — instead of the whole library. Pairs with a selection. |
+| **AI assistant (Gemini)** | Rules in the UI's mapping step, or `AI_FILE=./ai.json` with `GEMINI_API_KEY`. Each rule names a Strapi field and says in plain words what goes there — a meta description, a date pulled from the text, one value of an enumeration, page-builder content rewritten as clean HTML. One call per entry, answers cached in the state file; a failed call imports the entry without those fields. `GEMINI_API_BASE_URL` points at a proxy or gateway. |
 | **Strapi single types** | `WP_CUSTOM_TYPES` entry with `single` — the migrator PUTs one document instead of upserting a collection, taking the entry named by `wpId`/`slug`. |
 
 Still not migrated: multilingual sites (WPML/Polylang → Strapi i18n), post revisions, and

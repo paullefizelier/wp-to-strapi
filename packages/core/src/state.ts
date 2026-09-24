@@ -34,6 +34,11 @@ export interface MigrationState {
    * end and so the next one can retry just those instead of the whole site.
    */
   failures: Record<string, Record<number, { message: string; at: string }>>;
+  /**
+   * AI answers by `<kind>:<wpId>`, with the key of the request that produced them: the same
+   * entry asked the same thing is not paid for twice.
+   */
+  ai: Record<string, { key: string; values: Record<string, unknown> }>;
 }
 
 const EMPTY: MigrationState = {
@@ -46,6 +51,7 @@ const EMPTY: MigrationState = {
   terms: {},
   redirects: [],
   failures: {},
+  ai: {},
 };
 
 export class StateStore {
@@ -162,6 +168,16 @@ export class StateStore {
       if (Object.keys(bucket).length === 0) delete this.state.failures[kind];
       this.dirty = true;
     }
+  }
+
+  aiAnswer(entry: string, key: string): Record<string, unknown> | undefined {
+    const hit = this.state.ai?.[entry];
+    return hit && hit.key === key ? hit.values : undefined;
+  }
+
+  setAiAnswer(entry: string, key: string, values: Record<string, unknown>): void {
+    (this.state.ai ??= {})[entry] = { key, values };
+    this.dirty = true;
   }
 
   failedIds(kind: string): number[] {

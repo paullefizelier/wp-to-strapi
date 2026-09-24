@@ -61,6 +61,8 @@ const FR: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
   "media.scoped": (p) =>
     `Médias : ${p.used} fichier(s) sur ${p.total} sont utilisés par les contenus importés — ` +
     `seuls ceux-là sont migrés.`,
+  "ai.failed": (p) =>
+    `${p.entry} : l'assistant IA a échoué (${p.error}) — entrée importée sans ses champs IA.`,
   "failures.hint": () =>
     "Relancez avec « Relancer uniquement ces entrées » pour ne reprendre que celles-là.",
 };

@@ -617,6 +617,7 @@ const previewSchema = computed(() =>
                 :item="previewItem"
                 :schema="previewSchema"
                 :schema-loading="schemaLoading && !(previewItem.uid in schemas)"
+                :ai-fields="previewItem.aiFields"
               />
               <p class="text-xs text-dimmed">
                 Pour changer un champ, revenez à l'étape Mapping : l'aperçu se recalcule à chaque ouverture.

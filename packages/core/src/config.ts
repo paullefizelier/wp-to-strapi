@@ -1,3 +1,4 @@
+import type { AiConfig } from "./ai.js";
 import type { MappingSet } from "./mapping.js";
 
 /**
@@ -151,6 +152,8 @@ export interface AppConfig {
    * the content, fields mapped through `mediaId`/`mediaUrl`); `all` the whole library.
    */
   mediaScope: "all" | "used";
+  /** Fill fields with Gemini from the entry's content. Off when absent or without rules. */
+  ai?: AiConfig;
 }
 
 export interface SelectionConfig {
@@ -192,6 +195,7 @@ export function buildConfig(input: {
   customTypes?: CustomTypeConfig[];
   selection?: SelectionConfig;
   mediaScope?: "all" | "used";
+  ai?: AiConfig;
   taxonomies?: TaxonomyConfig[];
   routing?: Partial<RoutingConfig>;
   redirectsFile?: string;
@@ -245,5 +249,6 @@ export function buildConfig(input: {
     mapping: input.mapping ?? {},
     selection: input.selection ?? {},
     mediaScope: input.mediaScope ?? "all",
+    ai: input.ai,
   };
 }

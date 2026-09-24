@@ -1160,3 +1160,95 @@ describe("Preview: fields waiting on other steps", () => {
     }
   });
 });
+
+describe("AI assistant", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function setup(ai: Record<string, unknown>, answer: (prompt: string) => unknown) {
+    const generateJson = vi.fn(async (_model: string, req: { prompt: string }) => answer(req.prompt));
+    const strapi = fakeStrapi();
+    const make = () =>
+      new Migrator(
+        buildConfig({
+          wp: { baseUrl: WP },
+          strapi: { baseUrl: "https://cms.example.com", token: "t" },
+          stateFile: join(dir, "state.json"),
+          concurrency: 1,
+          ai: { provider: "gemini", model: "gemini-test", ...ai },
+        }),
+        { strapi: strapi.adapter, wp: fakeWp().wp, ai: { generateJson } },
+      );
+    return { make, strapi, generateJson };
+  }
+
+  it("fills the fields its rules name and says so on the item", async () => {
+    const { make, strapi } = setup(
+      { rules: { post: [{ target: "seo.metaDescription", instruction: "Résumé SEO" }] } },
+      () => ({ field_0: "Une description" }),
+    );
+    const m = make();
+    const events: MigratorEvent[] = [];
+    m.on("event", (e) => events.push(e));
+    await m.run({ only: ["posts"] });
+    expect(strapi.created[0]?.data).toMatchObject({ seo: { metaDescription: "Une description" } });
+    const ok = events.find((e) => e.type === "item-ok" && e.kind === "posts");
+    expect(ok && "item" in ok ? ok.item?.ai : null).toEqual(["seo.metaDescription"]);
+  });
+
+  it("leaves a field the mapping filled alone unless the rule overwrites", async () => {
+    const { make, strapi, generateJson } = setup(
+      {
+        rules: {
+          "*": [
+            { target: "title", instruction: "Titre" },
+            { target: "slug", instruction: "Slug", overwrite: true },
+          ],
+        },
+      },
+      (prompt) => (prompt.includes("field_0 → champ Strapi « slug »") ? { field_0: "nouveau-slug" } : {}),
+    );
+    await make().run({ only: ["posts"] });
+    expect(generateJson).toHaveBeenCalled();
+    expect(strapi.created[0]?.data).toMatchObject({ title: "Cafés & co", slug: "nouveau-slug" });
+  });
+
+  it("asks once per entry: a second run reuses the saved answer", async () => {
+    const { make, generateJson } = setup(
+      { rules: { post: [{ target: "resume", instruction: "Résumé" }] } },
+      () => ({ field_0: "R" }),
+    );
+    await make().run({ only: ["posts"] });
+    const first = generateJson.mock.calls.length;
+    await make().run({ only: ["posts"] });
+    expect(first).toBe(2); // two posts
+    expect(generateJson.mock.calls.length).toBe(first);
+  });
+
+  it("imports the entry anyway when the call fails, with a notice", async () => {
+    const { make, strapi } = setup({ rules: { post: [{ target: "resume", instruction: "Résumé" }] } }, () => {
+      throw new Error("quota");
+    });
+    const m = make();
+    const events: MigratorEvent[] = [];
+    m.on("event", (e) => events.push(e));
+    await m.run({ only: ["posts"] });
+    expect(strapi.created).toHaveLength(2);
+    expect(events.some((e) => e.type === "log" && e.code === "ai.failed")).toBe(true);
+  });
+
+  it("shows AI fields in the preview", async () => {
+    const { make } = setup(
+      { rules: { post: [{ target: "resume", instruction: "Résumé" }] } },
+      () => ({ field_0: "Aperçu IA" }),
+    );
+    const [item] = await make().preview({ kind: "posts", ids: [1] });
+    expect(item?.data.resume).toBe("Aperçu IA");
+    expect(item?.aiFields).toEqual(["resume"]);
+  });
+});
