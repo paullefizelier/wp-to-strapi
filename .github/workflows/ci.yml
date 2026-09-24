@@ -19,6 +19,8 @@ jobs:
         run: npm run -w @paullefizelier/wp-to-strapi-core build
       - name: Typecheck core
         run: npm run -w @paullefizelier/wp-to-strapi-core typecheck
+      - name: Test core
+        run: npm run -w @paullefizelier/wp-to-strapi-core test
       - name: Build strapi-adapter
         run: npm run -w @paullefizelier/wp-to-strapi-adapter build
       - name: Typecheck strapi-adapter

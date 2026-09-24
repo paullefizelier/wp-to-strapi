@@ -15,7 +15,12 @@ export default defineEventHandler(async (event) => {
   const client = new WordPressClient(parsed.data);
   try {
     const counts = await client.probe();
-    return { ok: true as const, counts };
+    // When WordPress answered from its canonical address, say which, so the form can store it.
+    return {
+      ok: true as const,
+      counts,
+      resolvedBaseUrl: client.redirected ? client.resolvedBaseUrl : undefined,
+    };
   } catch (err) {
     return { ok: false as const, error: (err as Error).message };
   }

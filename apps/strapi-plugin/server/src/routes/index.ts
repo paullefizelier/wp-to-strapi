@@ -32,6 +32,24 @@ export default {
         config: { policies: [] },
       },
       {
+        method: "POST",
+        path: "/preview",
+        handler: "migration.preview",
+        config: { policies: [] },
+      },
+      {
+        method: "GET",
+        path: "/fields/wp",
+        handler: "migration.wpFields",
+        config: { policies: [] },
+      },
+      {
+        method: "GET",
+        path: "/fields/strapi",
+        handler: "migration.strapiFields",
+        config: { policies: [] },
+      },
+      {
         method: "GET",
         path: "/status",
         handler: "migration.status",
