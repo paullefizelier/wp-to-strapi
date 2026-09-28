@@ -1075,7 +1075,15 @@ export class Migrator extends EventEmitter {
       if (!t.single) {
         const configured = st.correlationField;
         if (fields) {
-          const candidates = [...new Set([configured, "wpId", "slug"])];
+          // Content-type fields keep the case they were created with ("Slug", "wpid"):
+          // match the candidates on the real names.
+          const real = (want: string, pool: Set<string>) =>
+            [...pool].find((f) => f.toLowerCase() === want.toLowerCase());
+          const candidates = [
+            ...new Set(
+              [configured, "wpId", "slug"].map((c) => real(c, fields) ?? c),
+            ),
+          ];
           const chosen = candidates.find((c) => fields.has(c) && written.has(c));
           if (chosen) {
             this.correlationByUid.set(t.uid, chosen);

@@ -1357,3 +1357,47 @@ describe("Preflight: what Strapi would refuse", () => {
     expect(strapi.created).toHaveLength(2);
   });
 });
+
+describe("Preflight: field names as Strapi spells them", () => {
+  it("correlates on a capitalised Slug the mapping writes", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-"));
+    try {
+      const strapi = fakeStrapi();
+      const lookups: string[] = [];
+      strapi.adapter.describeTarget = async (uid: string) => ({
+        uid,
+        source: "schema" as const,
+        fields: ["Title", "Slug", "Content"].map((name) => ({ name })),
+      });
+      strapi.adapter.findOneBy = async (_uid, field, value) => {
+        lookups.push(`${field}=${value}`);
+        return null;
+      };
+      const events: MigratorEvent[] = [];
+      const m = new Migrator(
+        buildConfig({
+          wp: { baseUrl: WP },
+          strapi: { baseUrl: "https://cms.example.com", token: "t" },
+          stateFile: join(dir, "state.json"),
+          concurrency: 1,
+          mapping: {
+            post: [
+              { target: "Title", source: "title.rendered" },
+              { target: "Slug", source: "slug" },
+              { target: "Content", source: "$content" },
+            ],
+          },
+        }),
+        { strapi: strapi.adapter, wp: fakeWp().wp },
+      );
+      m.on("event", (e) => events.push(e));
+      await m.run({ only: ["posts"] });
+      expect(lookups).toEqual(["Slug=with-image", "Slug=draft-one"]);
+      expect(strapi.created).toHaveLength(2);
+      const fallback = events.find((e) => e.type === "log" && e.code === "preflight.correlationFallback");
+      expect(fallback && "params" in fallback ? fallback.params : null).toMatchObject({ field: "Slug" });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
