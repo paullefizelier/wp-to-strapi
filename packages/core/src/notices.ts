@@ -40,7 +40,6 @@ export const NOTICE_CODES = [
   "preflight.correlationNotMapped",
   "preflight.correlationFallback",
   "preflight.unknownFields",
-  "preflight.optionalFields",
 ] as const;
 
 export type NoticeCode = (typeof NOTICE_CODES)[number];
@@ -78,7 +77,6 @@ export interface NoticeParamsByCode {
   "preflight.correlationNotMapped": { uid: string; field: string; mapping: string };
   "preflight.correlationFallback": { uid: string; field: string; mapping: string };
   "preflight.unknownFields": { uid: string; fields: string; mapping: string; available: string };
-  "preflight.optionalFields": { uid: string; fields: string; mapping: string };
 }
 
 export type NoticeParams<C extends NoticeCode = NoticeCode> = NoticeParamsByCode[C];
@@ -155,9 +153,6 @@ const EN: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
   "preflight.unknownFields": (p) =>
     `${p.uid} has no field ${p.fields} (written by mapping "${p.mapping}"). Its fields: ` +
     `${p.available || "?"}. Rename them in that mapping, or add them in Strapi.`,
-  "preflight.optionalFields": (p) =>
-    `${p.uid} has no field ${p.fields} (mapping "${p.mapping}"): entries with a value for it will ` +
-    `be refused. Add the field, or remove it from the mapping.`,
   "ai.failed": (p) => `${p.entry}: the AI assistant failed (${p.error}) — imported without its fields.`,
   "failures.hint": () => "Re-run with retryFailed (CLI: --retry-failed) to retry just these.",
 };

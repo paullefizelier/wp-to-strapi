@@ -88,9 +88,6 @@ const FR: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
     `${p.uid} n'a pas de champ ${p.fields} (écrit par le mapping ${mappingLabel(p.mapping)}). ` +
     `Champs de ce content-type : ${p.available || "?"}. Renommez ces lignes dans le mapping ` +
     `(bouton « Lire les champs » pour les choisir), ou ajoutez les champs dans Strapi.`,
-  "preflight.optionalFields": (p) =>
-    `${p.uid} n'a pas de champ ${p.fields} (mapping ${mappingLabel(p.mapping)}) : les entrées qui ` +
-    `ont une valeur pour ce champ seront refusées. Ajoutez le champ, ou retirez la ligne du mapping.`,
   "ai.failed": (p) =>
     `${p.entry} : l'assistant IA a échoué (${p.error}) — entrée importée sans ses champs IA.`,
   "failures.hint": () =>

@@ -1332,11 +1332,22 @@ describe("Preflight: what Strapi would refuse", () => {
     expect(strapi.created).toHaveLength(2);
   });
 
-  it("stops on a mapped field Strapi does not declare, warns on one sent only when set", async () => {
-    const { strapi } = withSchema(["title", "slug", "content", "wpId", "cover", "categories"]);
-    const { m, events } = migrator(strapi);
-    await expect(m.run({ only: ["posts"] })).rejects.toThrow(/has no field excerpt/);
-    expect(codes(events)).toEqual(["error:preflight.unknownFields", "warn:preflight.optionalFields"]);
+  it("stops on any mapped field Strapi does not declare — ignore-when-empty included", async () => {
+    const { strapi } = withSchema(["title", "slug", "content", "wpId", "categories"]);
+    const { m, events } = migrator(strapi, {
+      mapping: {
+        post: [
+          { target: "title", source: "title.rendered" },
+          { target: "wpId", source: "id" },
+          { target: "excerpt", source: "excerpt.rendered", omitEmpty: true },
+          { target: "cover", source: "featured_media", transforms: ["mediaId"], omitEmpty: true },
+          // tags are not migrated (no tag content-type): this row never writes, never blocks.
+          { target: "tags", source: "tags", transforms: ["terms:tags"], omitEmpty: true },
+        ],
+      },
+    });
+    await expect(m.run({ only: ["posts"] })).rejects.toThrow(/has no field excerpt, cover\./);
+    expect(codes(events)).toEqual(["error:preflight.unknownFields"]);
   });
 
   it("only reports in a dry run", async () => {

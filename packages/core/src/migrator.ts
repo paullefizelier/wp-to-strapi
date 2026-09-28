@@ -1112,22 +1112,21 @@ export class Migrator extends EventEmitter {
       }
       if (!fields) continue;
 
-      // A field always written fails every entry; one written only when it has a value
-      // (omitEmpty: featured image, terms) fails only those — worth a warning, not a stop.
-      const unknown = new Map<string, boolean>();
+      // Strapi refuses any entry carrying a key it does not declare — "ignore when empty" only
+      // spares the entries without a value, and an id or an excerpt always has one. The one
+      // row that never writes is a term lookup on a taxonomy this run does not migrate.
+      const unknown = new Set<string>();
       for (const row of t.rows) {
         const name = row.target.split(".")[0] as string;
         if (!name || fields.has(name) || reported.has(name)) continue;
-        unknown.set(name, (unknown.get(name) ?? false) || !row.omitEmpty);
+        const terms = (row.transforms ?? []).find((x) => x.startsWith("terms:"));
+        if (terms && !this.taxonomyMigrates(terms.slice("terms:".length))) continue;
+        unknown.add(name);
       }
-      const always = [...unknown].filter(([, a]) => a).map(([n]) => n);
-      const sometimes = [...unknown].filter(([, a]) => !a).map(([n]) => n);
-      if (always.length > 0) {
-        this.say(notice("preflight.unknownFields", { uid: t.uid, fields: always.join(", "), mapping: t.mapping, available }, "error"));
-        problems.push(`${t.uid} has no field ${always.join(", ")}`);
-      }
-      if (sometimes.length > 0) {
-        this.say(notice("preflight.optionalFields", { uid: t.uid, fields: sometimes.join(", "), mapping: t.mapping }, "warn"));
+      if (unknown.size > 0) {
+        const list = [...unknown].join(", ");
+        this.say(notice("preflight.unknownFields", { uid: t.uid, fields: list, mapping: t.mapping, available }, "error"));
+        problems.push(`${t.uid} has no field ${list}`);
       }
     }
     if (problems.length > 0 && !this.cfg.dryRun) {
@@ -1695,14 +1694,22 @@ export class Migrator extends EventEmitter {
         });
         return;
       }
-      const { buffer, contentType } = await this.wp.fetchBinary(m.source_url);
-      const uploaded = await this.strapi.uploadFile({
-        buffer,
-        fileName,
-        contentType: contentType || m.mime_type,
-        alternativeText: m.alt_text || decodeEntities(m.title?.rendered ?? ""),
-        caption: decodeEntities(m.caption?.rendered ?? ""),
-      });
+      const { buffer, contentType } = await this.wp
+        .fetchBinary(m.source_url)
+        .catch((err: Error) => {
+          throw new Error(`download ${m.source_url}: ${err.message}`);
+        });
+      const uploaded = await this.strapi
+        .uploadFile({
+          buffer,
+          fileName,
+          contentType: contentType || m.mime_type,
+          alternativeText: m.alt_text || decodeEntities(m.title?.rendered ?? ""),
+          caption: decodeEntities(m.caption?.rendered ?? ""),
+        })
+        .catch((err: Error) => {
+          throw new Error(`upload to Strapi (${fileName}, ${buffer.length} B): ${err.message}`);
+        });
       this.state.setMedia(
         m.id,
         uploaded.id,
