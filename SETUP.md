@@ -159,6 +159,7 @@ Pour avoir une fiche officielle Strapi Market avec badge, il faut ouvrir un PR s
 | `npm warn EBADENGINE … nuxt@4.5.2 … required: { node: '^22.19.0 …' }` | Node trop ancien | `nvm install && nvm use` (Node 24), ou mettre Node à jour |
 | `npm error ENOTEMPTY: directory not empty, rename …` | `npm i` lancé sur un `node_modules` créé par pnpm (ou une install interrompue) | `rm -rf node_modules apps/*/node_modules packages/*/node_modules` puis `npm ci` |
 | `TS7016: Could not find a declaration file for module 'undici'` | Installation incomplète (voir ligne précédente) | Même fix : tout supprimer puis `npm ci` |
+| `Cannot find native binding` / `Cannot find module '@rolldown/binding-darwin-arm64'` | Lockfile régénéré sur une autre plateforme sans les variantes natives de la tienne (bug npm/cli#4828) | `git pull` (lockfile corrigé), puis tout supprimer et `npm ci`. Si tu régénères le lockfile : `rm -rf node_modules */*/node_modules package-lock.json && npm install`, puis `node scripts/check-lockfile.mjs` |
 | `sh: tsc: command not found` | L'installation a échoué avant la fin : les dépendances ne sont pas là | Corriger l'erreur d'installation, puis relancer `npm ci` (ou `pnpm install`) |
 | `ERR_PNPM_NO_MATCHING_VERSION` sur un package interne | `pnpm-workspace.yaml` absent ou mal configuré | Vérifier qu'il existe à la racine |
 | `npm error 402 Payment Required` au publish | Scoped package en privé par défaut | Vérifier `publishConfig.access: "public"` dans le `package.json` concerné |
