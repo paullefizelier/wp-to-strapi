@@ -7,6 +7,18 @@ import type { NoticeCode, NoticeParamsByCode } from "@paullefizelier/wp-to-strap
  * UI. Being typed as a full `NoticeCode` record, a code added to the engine fails the
  * typecheck here until it has French text — no silently untranslated message.
  */
+/** Where to fix a mapping, as the Mapping step names its tabs. */
+function mappingLabel(key: string): string {
+  if (key.startsWith("route:")) return `de la route « ${key.slice(6)} »`;
+  if (key.startsWith("custom:")) return `du type « ${key.slice(7)} »`;
+  if (key.startsWith("taxonomy:")) return `de la taxonomie « ${key.slice(9)} »`;
+  const tabs: Record<string, string> = {
+    post: "« Articles »", page: "« Pages »", category: "« Catégories »", tag: "« Étiquettes »",
+    author: "des auteurs", comment: "des commentaires", menu: "des menus",
+  };
+  return tabs[key] ?? `« ${key} »`;
+}
+
 const FR: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
   "content.empty": (p) => `${p.entry} : WordPress renvoie un contenu vide — rien à importer.`,
   "content.builder": (p) =>
@@ -62,16 +74,23 @@ const FR: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
     `Médias : ${p.used} fichier(s) sur ${p.total} sont utilisés par les contenus importés — ` +
     `seuls ceux-là sont migrés.`,
   "preflight.noCorrelation": (p) =>
-    `${p.uid} n'a pas de champ « ${p.field} » : l'outil s'en sert pour retrouver ce qu'il a déjà ` +
-    `importé (et éviter les doublons). Ajoutez-le dans Strapi (Content-Type Builder → champ ` +
-    `Nombre, entier, nommé « ${p.field} »), ou choisissez un autre champ de correspondance, ` +
-    `par exemple « slug », à l'étape Destination.`,
+    `${p.uid} (${mappingLabel(p.mapping)}) : aucun champ pour retrouver les entrées déjà ` +
+    `importées — ni « ${p.field} », ni « wpId », ni « slug ». Le plus simple : dans Strapi, ` +
+    `ajoutez un champ Nombre (entier) nommé « wpId », puis dans le mapping ${mappingLabel(p.mapping)} ` +
+    `une ligne id → wpId. Champs de ce content-type : ${p.available || "?"}.`,
+  "preflight.correlationNotMapped": (p) =>
+    `${p.uid} : le champ « ${p.field} » existe, mais le mapping ${mappingLabel(p.mapping)} ne le ` +
+    `remplit pas. Ajoutez la ligne ${p.field === "wpId" ? "id" : p.field} → ${p.field}, sinon ` +
+    `chaque relance créerait des doublons.`,
+  "preflight.correlationFallback": (p) =>
+    `${p.uid} : les entrées déjà importées seront retrouvées par « ${p.field} ».`,
   "preflight.unknownFields": (p) =>
-    `${p.uid} n'a pas de champ ${p.fields} : ajoutez-le dans le Content-Type Builder de Strapi, ` +
-    `ou retirez-le du mapping.`,
+    `${p.uid} n'a pas de champ ${p.fields} (écrit par le mapping ${mappingLabel(p.mapping)}). ` +
+    `Champs de ce content-type : ${p.available || "?"}. Renommez ces lignes dans le mapping ` +
+    `(bouton « Lire les champs » pour les choisir), ou ajoutez les champs dans Strapi.`,
   "preflight.optionalFields": (p) =>
-    `${p.uid} n'a pas de champ ${p.fields} : les entrées qui ont une valeur pour ce champ seront ` +
-    `refusées par Strapi. Ajoutez le champ, ou retirez-le du mapping.`,
+    `${p.uid} n'a pas de champ ${p.fields} (mapping ${mappingLabel(p.mapping)}) : les entrées qui ` +
+    `ont une valeur pour ce champ seront refusées. Ajoutez le champ, ou retirez la ligne du mapping.`,
   "ai.failed": (p) =>
     `${p.entry} : l'assistant IA a échoué (${p.error}) — entrée importée sans ses champs IA.`,
   "failures.hint": () =>

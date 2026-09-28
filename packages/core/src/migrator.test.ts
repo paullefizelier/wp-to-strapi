@@ -1296,12 +1296,40 @@ describe("Preflight: what Strapi would refuse", () => {
   const codes = (events: MigratorEvent[]) =>
     events.flatMap((e) => (e.type === "log" && e.code?.startsWith("preflight.") ? [`${e.level}:${e.code}`] : []));
 
-  it("stops before writing anything when the content-type has no correlation field", async () => {
-    const { strapi } = withSchema(["title", "slug", "content", "excerpt", "cover", "categories", "tags"]);
-    const { m, events } = migrator(strapi);
-    await expect(m.run({ only: ["media", "posts"] })).rejects.toThrow(/has no "wpId" field.*Nothing was written/);
+  it("stops before writing anything when the content-type has no way to find imported entries", async () => {
+    const { strapi } = withSchema(["titre", "contenu", "cover", "categories", "tags"]);
+    const { m, events } = migrator(strapi, {
+      mapping: { post: [{ target: "titre", source: "title.rendered" }, { target: "wpId", source: "id" }] },
+    });
+    await expect(m.run({ only: ["media", "posts"] })).rejects.toThrow(/has none of wpId, slug.*Nothing was written/);
     expect(strapi.created).toHaveLength(0);
     expect(codes(events)).toEqual(["error:preflight.noCorrelation"]);
+    const n = events.find((e) => e.type === "log" && e.code === "preflight.noCorrelation");
+    expect(n && "params" in n ? n.params : null).toMatchObject({ mapping: "post", available: "titre, contenu, cover, categories, tags" });
+  });
+
+  it("falls back to slug per content-type when it lacks wpId, and still flags the wpId it would send", async () => {
+    const { strapi } = withSchema(["title", "slug", "content", "excerpt", "cover", "categories", "tags"]);
+    const { m, events } = migrator(strapi);
+    await expect(m.run({ only: ["posts"] })).rejects.toThrow(/has no field wpId/);
+    expect(codes(events)).toEqual(["info:preflight.correlationFallback", "error:preflight.unknownFields"]);
+  });
+
+  it("says when the correlation field exists but the mapping does not write it", async () => {
+    const { strapi } = withSchema(["titre", "wpId"]);
+    const { m, events } = migrator(strapi, { mapping: { post: [{ target: "titre", source: "title.rendered" }] } });
+    await expect(m.run({ only: ["posts"] })).rejects.toThrow(/does not write "wpId"/);
+    expect(codes(events)).toEqual(["error:preflight.correlationNotMapped"]);
+  });
+
+  it("imports with the fallback field once the mapping only writes what Strapi has", async () => {
+    const { strapi, lookups } = withSchema(["titre", "slug"]);
+    const { m } = migrator(strapi, {
+      mapping: { post: [{ target: "titre", source: "title.rendered" }, { target: "slug", source: "slug" }] },
+    });
+    await m.run({ only: ["posts"] });
+    expect(lookups.map((l) => l.field)).toEqual(["slug", "slug"]);
+    expect(strapi.created).toHaveLength(2);
   });
 
   it("stops on a mapped field Strapi does not declare, warns on one sent only when set", async () => {

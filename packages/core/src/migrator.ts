@@ -93,6 +93,12 @@ export function mediaFileName(m: Pick<WpMedia, "source_url" | "mime_type">): str
   return name;
 }
 
+/** Maintained by Strapi itself — never a mapping target, never worth listing. */
+const SYSTEM_FIELDS = new Set([
+  "id", "documentId", "createdAt", "updatedAt", "publishedAt", "createdBy", "updatedBy",
+  "locale", "localizations",
+]);
+
 /**
  * What identifies an entry in Strapi: the value the mapping writes into the correlation field
  * (the WordPress id for `wpId`, the slug for `slug`…), the WordPress id when it writes none.
@@ -318,6 +324,8 @@ export class Migrator extends EventEmitter {
   private mediaMigrated = false;
   /** The kinds this run walks — what "media used by the imported entries" is measured on. */
   private runKinds: Kind[] = [];
+  /** The correlation field each destination uses, settled by preflightTargets. */
+  private correlationByUid = new Map<string, string>();
   /** Each route with its categories and tags resolved to WordPress ids. */
   private resolvedRoutes: Array<{ route: RouteConfig; categories: Set<number>; tags: Set<number> }> = [];
   /** How many entries each route took this run, for the summary. */
@@ -475,42 +483,15 @@ export class Migrator extends EventEmitter {
     const problems = sets.flatMap(([name, rows]) =>
       rows ? validateMapping(rows).map((i) => `${name}.${i.target || "?"}: ${i.message}`) : [],
     );
-    // A mapping that drops the correlation field turns every re-run into a duplicate import.
-    const key = this.cfg.strapi.correlationField;
-    const kinds: Array<["post" | "page" | "category" | "tag", string | undefined]> = [
-      ["post", undefined],
-      ["page", undefined],
-      ["category", undefined],
-      ["tag", undefined],
-      ...this.cfg.customTypes.map(
-        (t) => ["post", t.restBase] as ["post", string],
-      ),
-    ];
+    // Whether each mapping writes a correlation field is checked per destination at run start
+    // (preflightTargets), where the Strapi schema says which fields exist.
     for (const route of this.cfg.routing.routes) {
       if (!route.uid) problems.push(`route "${route.name}": no Strapi content-type`);
       if (!route.name) problems.push("a route has no name");
-      const rows = this.mappingFor(route.from === "pages" ? "page" : "post", undefined, route.name);
-      if (!rows.some((row) => row.target === this.cfg.strapi.correlationField)) {
-        problems.push(
-          `route "${route.name}": the mapping never writes "${this.cfg.strapi.correlationField}", ` +
-            `so re-running would create duplicates instead of updating.`,
-        );
-      }
     }
     for (const [name, rows] of Object.entries(this.cfg.mapping?.route ?? {})) {
       for (const issue of validateMapping(rows)) {
         problems.push(`route.${name}.${issue.target || "?"}: ${issue.message}`);
-      }
-    }
-    for (const [kind, restBase] of kinds) {
-      if (kind === "category" && !this.cfg.strapi.categoryUid) continue;
-      if (kind === "tag" && !this.cfg.strapi.tagUid) continue;
-      const rows = this.mappingFor(kind, restBase);
-      if (!rows.some((row) => row.target === key)) {
-        problems.push(
-          `${restBase ?? kind}: the mapping never writes "${key}", so re-running would create ` +
-            `duplicates instead of updating. Add it, or change strapi.correlationField.`,
-        );
       }
     }
 
@@ -1014,10 +995,10 @@ export class Migrator extends EventEmitter {
    * Silent when the schema cannot be read (no content-type builder access): nothing to check.
    */
   private async preflightTargets(kinds: Kind[]): Promise<void> {
-    if (!this.strapi.describeTarget) return;
     const st = this.cfg.strapi;
     const set = this.cfg.mapping ?? {};
-    const targets: Array<{ uid: string; plural?: string; rows: FieldMapping[]; single?: boolean }> = [];
+    type Target = { uid: string; plural?: string; rows: FieldMapping[]; single?: boolean; mapping: string };
+    const targets: Target[] = [];
     const routesOnly = this.resolvedRoutes.length > 0 && this.cfg.routing.unmatched === "skip";
     for (const from of ["posts", "pages"] as const) {
       if (!kinds.includes(from)) continue;
@@ -1027,73 +1008,118 @@ export class Migrator extends EventEmitter {
           uid: from === "posts" ? st.postUid : st.pageUid,
           plural: from === "posts" ? st.postPluralPath : st.pagePluralPath,
           rows: this.mappingFor(kind),
+          mapping: kind,
         });
       }
       for (const { route } of this.resolvedRoutes) {
         if ((route.from ?? "posts") !== from) continue;
-        targets.push({ uid: route.uid, plural: route.pluralPath, rows: this.mappingFor(kind, undefined, route.name) });
+        targets.push({
+          uid: route.uid,
+          plural: route.pluralPath,
+          rows: this.mappingFor(kind, undefined, route.name),
+          mapping: `route:${route.name}`,
+        });
       }
     }
     if (kinds.includes("custom")) {
       for (const t of this.cfg.customTypes) {
-        targets.push({ uid: t.uid, plural: t.pluralPath, rows: this.mappingFor("post", t.restBase), single: t.single });
+        targets.push({ uid: t.uid, plural: t.pluralPath, rows: this.mappingFor("post", t.restBase), single: t.single, mapping: `custom:${t.restBase}` });
       }
     }
     if (kinds.includes("categories") && st.categoryUid) {
-      targets.push({ uid: st.categoryUid, plural: st.categoryPluralPath, rows: this.termMapping("categories") });
+      targets.push({ uid: st.categoryUid, plural: st.categoryPluralPath, rows: this.termMapping("categories"), mapping: "category" });
     }
     if (kinds.includes("tags") && st.tagUid) {
-      targets.push({ uid: st.tagUid, plural: st.tagPluralPath, rows: this.termMapping("tags") });
+      targets.push({ uid: st.tagUid, plural: st.tagPluralPath, rows: this.termMapping("tags"), mapping: "tag" });
     }
     if (kinds.includes("taxonomies")) {
       for (const t of this.cfg.taxonomies) {
-        targets.push({ uid: t.uid, plural: t.pluralPath, rows: this.termMapping(t.restBase) });
+        targets.push({ uid: t.uid, plural: t.pluralPath, rows: this.termMapping(t.restBase), mapping: `taxonomy:${t.restBase}` });
       }
     }
     if (kinds.includes("authors") && st.authorUid) {
-      targets.push({ uid: st.authorUid, plural: st.authorPluralPath, rows: mergeMappings(set.common, set.author ?? this.builtIn(defaultAuthorMapping())) });
+      targets.push({ uid: st.authorUid, plural: st.authorPluralPath, rows: mergeMappings(set.common, set.author ?? this.builtIn(defaultAuthorMapping())), mapping: "author" });
     }
     if (kinds.includes("comments") && st.commentUid) {
-      targets.push({ uid: st.commentUid, plural: st.commentPluralPath, rows: mergeMappings(set.common, set.comment ?? this.builtIn(defaultCommentMapping())) });
+      targets.push({ uid: st.commentUid, plural: st.commentPluralPath, rows: mergeMappings(set.common, set.comment ?? this.builtIn(defaultCommentMapping())), mapping: "comment" });
     }
     if (kinds.includes("menus") && st.menuUid) {
-      targets.push({ uid: st.menuUid, plural: st.menuPluralPath, rows: mergeMappings(set.common, set.menu ?? this.builtIn(defaultMenuMapping())) });
+      targets.push({ uid: st.menuUid, plural: st.menuPluralPath, rows: mergeMappings(set.common, set.menu ?? this.builtIn(defaultMenuMapping())), mapping: "menu" });
     }
 
     const problems: string[] = [];
     const seen = new Set<string>();
+    this.correlationByUid = new Map();
     for (const t of targets) {
-      const key = `${t.uid}|${t.rows.map((r) => r.target).join(",")}`;
+      const key = `${t.uid}|${t.mapping}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      let fields: Set<string>;
-      try {
-        const schema = await this.strapi.describeTarget(t.uid, t.plural);
-        if (schema.source !== "schema") continue;
-        fields = new Set(schema.fields.map((f) => f.name));
-      } catch {
-        continue;
+      const written = new Set(t.rows.map((r) => r.target.split(".")[0] as string));
+
+      let fields: Set<string> | null = null;
+      if (this.strapi.describeTarget) {
+        try {
+          const schema = await this.strapi.describeTarget(t.uid, t.plural);
+          if (schema.source === "schema") fields = new Set(schema.fields.map((f) => f.name));
+        } catch {
+          /* no content-type builder access: nothing to check against */
+        }
       }
-      if (!t.single && !fields.has(st.correlationField)) {
-        this.say(notice("preflight.noCorrelation", { uid: t.uid, field: st.correlationField }, "error"));
-        problems.push(`${t.uid} has no "${st.correlationField}" field`);
+      const available = fields
+        ? [...fields].filter((f) => !SYSTEM_FIELDS.has(f)).slice(0, 30).join(", ")
+        : "";
+      const reported = new Set<string>();
+
+      // Which field finds an entry already imported: the configured one, else wpId, else slug
+      // — the first this content-type has and this mapping writes.
+      if (!t.single) {
+        const configured = st.correlationField;
+        if (fields) {
+          const candidates = [...new Set([configured, "wpId", "slug"])];
+          const chosen = candidates.find((c) => fields.has(c) && written.has(c));
+          if (chosen) {
+            this.correlationByUid.set(t.uid, chosen);
+            if (chosen !== configured) {
+              this.say(notice("preflight.correlationFallback", { uid: t.uid, field: chosen, mapping: t.mapping }, "info"));
+            }
+          } else {
+            const unmapped = candidates.find((c) => fields.has(c));
+            if (unmapped) {
+              this.say(notice("preflight.correlationNotMapped", { uid: t.uid, field: unmapped, mapping: t.mapping }, "error"));
+              problems.push(`${t.uid}: the mapping does not write "${unmapped}"`);
+            } else {
+              this.say(notice("preflight.noCorrelation", { uid: t.uid, field: configured, mapping: t.mapping, available }, "error"));
+              problems.push(`${t.uid} has none of ${candidates.join(", ")} to find entries already imported`);
+              reported.add(configured);
+            }
+          }
+        } else if (!written.has(configured)) {
+          const label = t.mapping.startsWith("route:") ? `route "${t.mapping.slice(6)}"` : t.mapping;
+          const message =
+            `${label}: the mapping never writes "${configured}", so re-running would create ` +
+            `duplicates instead of updating. Add it, or change strapi.correlationField.`;
+          this.fire({ type: "log", level: "error", message });
+          problems.push(message);
+        }
       }
+      if (!fields) continue;
+
       // A field always written fails every entry; one written only when it has a value
       // (omitEmpty: featured image, terms) fails only those — worth a warning, not a stop.
       const unknown = new Map<string, boolean>();
       for (const row of t.rows) {
         const name = row.target.split(".")[0] as string;
-        if (!name || fields.has(name) || name === st.correlationField) continue;
+        if (!name || fields.has(name) || reported.has(name)) continue;
         unknown.set(name, (unknown.get(name) ?? false) || !row.omitEmpty);
       }
       const always = [...unknown].filter(([, a]) => a).map(([n]) => n);
       const sometimes = [...unknown].filter(([, a]) => !a).map(([n]) => n);
       if (always.length > 0) {
-        this.say(notice("preflight.unknownFields", { uid: t.uid, fields: always.join(", ") }, "error"));
+        this.say(notice("preflight.unknownFields", { uid: t.uid, fields: always.join(", "), mapping: t.mapping, available }, "error"));
         problems.push(`${t.uid} has no field ${always.join(", ")}`);
       }
       if (sometimes.length > 0) {
-        this.say(notice("preflight.optionalFields", { uid: t.uid, fields: sometimes.join(", ") }, "warn"));
+        this.say(notice("preflight.optionalFields", { uid: t.uid, fields: sometimes.join(", "), mapping: t.mapping }, "warn"));
       }
     }
     if (problems.length > 0 && !this.cfg.dryRun) {
@@ -1503,7 +1529,7 @@ export class Migrator extends EventEmitter {
     wpId: number,
     data: Record<string, unknown>,
   ): Promise<{ documentId: string; action: WriteAction }> {
-    const field = this.cfg.strapi.correlationField;
+    const field = this.correlationByUid.get(uid) ?? this.cfg.strapi.correlationField;
     const existing = await this.strapi.findOneBy(uid, field, correlationValue(data, field, wpId), pluralOverride);
     const saved = existing
       ? await this.strapi.update(uid, existing.documentId, data, pluralOverride, {
@@ -2005,7 +2031,7 @@ export class Migrator extends EventEmitter {
         item: { ...item, action: "updated", documentId: saved.documentId },
       };
     }
-    const field = this.cfg.strapi.correlationField;
+    const field = this.correlationByUid.get(uid) ?? this.cfg.strapi.correlationField;
     const existing = await this.strapi.findOneBy(uid, field, correlationValue(data, field, p.id), pluralOverride);
     const saved = existing
       ? await this.strapi.update(uid, existing.documentId, data, pluralOverride, write)

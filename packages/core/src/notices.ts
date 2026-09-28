@@ -37,6 +37,8 @@ export const NOTICE_CODES = [
   "media.scoped",
   "ai.failed",
   "preflight.noCorrelation",
+  "preflight.correlationNotMapped",
+  "preflight.correlationFallback",
   "preflight.unknownFields",
   "preflight.optionalFields",
 ] as const;
@@ -71,9 +73,12 @@ export interface NoticeParamsByCode {
   "wp.redirected": { from: string; to: string };
   "media.scoped": { used: number; total: number };
   "ai.failed": { entry: string; error: string };
-  "preflight.noCorrelation": { uid: string; field: string };
-  "preflight.unknownFields": { uid: string; fields: string };
-  "preflight.optionalFields": { uid: string; fields: string };
+  /** `mapping` names the mapping that writes to it: post, page, route:<name>, custom:<restBase>… */
+  "preflight.noCorrelation": { uid: string; field: string; mapping: string; available: string };
+  "preflight.correlationNotMapped": { uid: string; field: string; mapping: string };
+  "preflight.correlationFallback": { uid: string; field: string; mapping: string };
+  "preflight.unknownFields": { uid: string; fields: string; mapping: string; available: string };
+  "preflight.optionalFields": { uid: string; fields: string; mapping: string };
 }
 
 export type NoticeParams<C extends NoticeCode = NoticeCode> = NoticeParamsByCode[C];
@@ -139,13 +144,20 @@ const EN: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
     `Media: ${p.used} of ${p.total} files are used by the entries being imported — only those ` +
     `are migrated.`,
   "preflight.noCorrelation": (p) =>
-    `${p.uid} has no "${p.field}" field: the migrator uses it to find entries it already ` +
-    `imported. Add it (an integer field "${p.field}"), or pick another correlation field such as slug.`,
+    `${p.uid} (mapping "${p.mapping}"): no field to find entries already imported — it has no ` +
+    `"${p.field}", wpId or slug. Add an integer field "wpId" and map id → wpId. ` +
+    `Its fields: ${p.available || "?"}.`,
+  "preflight.correlationNotMapped": (p) =>
+    `${p.uid}: "${p.field}" exists but mapping "${p.mapping}" does not write it — add a row ` +
+    `${p.field === "wpId" ? "id" : p.field} → ${p.field}, or re-runs would create duplicates.`,
+  "preflight.correlationFallback": (p) =>
+    `${p.uid}: entries already imported are found by "${p.field}".`,
   "preflight.unknownFields": (p) =>
-    `${p.uid} has no field ${p.fields}: add it in the Content-Type Builder, or remove it from the mapping.`,
+    `${p.uid} has no field ${p.fields} (written by mapping "${p.mapping}"). Its fields: ` +
+    `${p.available || "?"}. Rename them in that mapping, or add them in Strapi.`,
   "preflight.optionalFields": (p) =>
-    `${p.uid} has no field ${p.fields}: entries that have a value for it will be refused. ` +
-    `Add the field, or remove it from the mapping.`,
+    `${p.uid} has no field ${p.fields} (mapping "${p.mapping}"): entries with a value for it will ` +
+    `be refused. Add the field, or remove it from the mapping.`,
   "ai.failed": (p) => `${p.entry}: the AI assistant failed (${p.error}) — imported without its fields.`,
   "failures.hint": () => "Re-run with retryFailed (CLI: --retry-failed) to retry just these.",
 };
