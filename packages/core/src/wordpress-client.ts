@@ -23,6 +23,32 @@ export interface WordPressClientOptions {
   onRetry?: (attempt: number, delayMs: number, reason: string) => void;
 }
 
+type RequestOptions = NonNullable<Parameters<typeof request>[1]>;
+
+const MAX_HOPS = 5;
+
+/**
+ * `request` that follows redirects itself. undici's own `maxRedirections` option is gone from
+ * undici 7 ("use the redirect interceptor"), and which undici a host app hands this package
+ * varies — Nuxt ships 8. Credentials never leave the origin they were written for.
+ */
+async function requestFollowing(url: string, opts: RequestOptions): ReturnType<typeof request> {
+  let current = url;
+  let headers = { ...((opts.headers as Record<string, string> | undefined) ?? {}) };
+  for (let hop = 0; ; hop++) {
+    const res = await request(current, { ...opts, headers });
+    const location = res.headers.location;
+    if (res.statusCode < 300 || res.statusCode >= 400 || !location || hop >= MAX_HOPS) return res;
+    await res.body.dump();
+    const next = new URL(String(Array.isArray(location) ? location[0] : location), current);
+    if (next.origin !== new URL(current).origin) {
+      const { Authorization: _dropped, ...rest } = headers;
+      headers = rest;
+    }
+    current = next.toString();
+  }
+}
+
 /** WordPress caps `include` at `per_page` ids, and long URLs trip proxies: ask in batches. */
 const INCLUDE_BATCH = 100;
 
@@ -382,9 +408,8 @@ export class WordPressClient {
    */
   async fetchPage(url: string): Promise<string> {
     return withRetry(async () => {
-      const res = await request(url, {
+      const res = await requestFollowing(url, {
         method: "GET",
-        maxRedirections: 3,
         headers: {
           Accept: "text/html",
           "User-Agent": "wp-to-strapi/0.1",
@@ -408,9 +433,8 @@ export class WordPressClient {
    */
   async checkBinary(url: string): Promise<{ size?: number }> {
     return withRetry(async () => {
-      const res = await request(url, {
+      const res = await requestFollowing(url, {
         method: "HEAD",
-        maxRedirections: 5,
         headers: this.authHeader
           ? { Authorization: this.authHeader, "User-Agent": "wp-to-strapi/0.1" }
           : { "User-Agent": "wp-to-strapi/0.1" },
@@ -433,11 +457,10 @@ export class WordPressClient {
     url: string,
   ): Promise<{ buffer: Buffer; contentType: string }> {
     return withRetry(async () => {
-      // Uploads are often served from a CDN behind a redirect. Following it is fine here:
-      // undici drops Authorization on a cross-origin hop, and a file needs none.
-      const res = await request(url, {
+      // Uploads are often served from a CDN behind a redirect: follow it, credentials staying
+      // on the WordPress origin (a file needs none).
+      const res = await requestFollowing(url, {
         method: "GET",
-        maxRedirections: 5,
         headers: this.authHeader
           ? { Authorization: this.authHeader, "User-Agent": "wp-to-strapi/0.1" }
           : { "User-Agent": "wp-to-strapi/0.1" },

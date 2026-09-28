@@ -9,7 +9,11 @@ vi.mock("undici", async () => {
   const actual = await vi.importActual<typeof import("undici")>("undici");
   return {
     ...actual,
-    request: vi.fn(async (url: string | URL, opts: { headers?: Record<string, string> }) => {
+    request: vi.fn(async (url: string | URL, opts: { headers?: Record<string, string>; maxRedirections?: number }) => {
+      // Like undici 7+: the option is gone, whatever undici the host app provides.
+      if (opts.maxRedirections !== undefined) {
+        throw new Error("maxRedirections is not supported, use the redirect interceptor");
+      }
       const href = String(url);
       calls.push({ url: href, auth: Boolean(opts.headers?.Authorization) });
       const target = Object.entries(redirects).find(([from]) => href.startsWith(from));
@@ -23,7 +27,12 @@ vi.mock("undici", async () => {
       return {
         statusCode: 200,
         headers: { "x-wp-total": "7", "x-wp-totalpages": "1" },
-        body: { json: async () => [], text: async () => "[]", dump: async () => {} },
+        body: {
+          json: async () => [],
+          text: async () => "[]",
+          dump: async () => {},
+          arrayBuffer: async () => new TextEncoder().encode("file").buffer,
+        },
       };
     }),
   };
@@ -182,5 +191,28 @@ describe("Narrowed listings", () => {
     const wp = withAuth("https://blog.test");
     await drain(wp.pages(["publish"], undefined, ["id", "title"]));
     expect(new URL(calls[0]!.url).searchParams.get("_fields")).toBe("id,title");
+  });
+});
+
+describe("Downloads behind redirects", () => {
+  it("follows a CDN redirect without maxRedirections, credentials left on WordPress", async () => {
+    redirects = { "https://blog.test/wp-content/uploads/a.jpg": "https://cdn.test/a.jpg" };
+    const wp = withAuth("https://blog.test");
+    const { buffer } = await wp.fetchBinary("https://blog.test/wp-content/uploads/a.jpg");
+    expect(buffer.toString()).toBe("file");
+    expect(calls.map((c) => [c.url, c.auth])).toEqual([
+      ["https://blog.test/wp-content/uploads/a.jpg", true],
+      ["https://cdn.test/a.jpg", false],
+    ]);
+  });
+
+  it("keeps credentials on a same-origin hop, and checks files the same way", async () => {
+    redirects = { "https://blog.test/old.jpg": "https://blog.test/new.jpg" };
+    const wp = withAuth("https://blog.test");
+    await wp.checkBinary("https://blog.test/old.jpg");
+    expect(calls.map((c) => [c.url, c.auth])).toEqual([
+      ["https://blog.test/old.jpg", true],
+      ["https://blog.test/new.jpg", true],
+    ]);
   });
 });
