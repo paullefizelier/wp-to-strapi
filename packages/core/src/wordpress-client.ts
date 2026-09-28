@@ -472,10 +472,12 @@ export class WordPressClient {
           parseRetryAfter(res.headers["retry-after"]),
         );
       }
-      const arr = await res.body.arrayBuffer();
+      // Read the stream chunk by chunk: the plainest body API, the same in every undici.
+      const chunks: Buffer[] = [];
+      for await (const chunk of res.body) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
       const contentType =
         (res.headers["content-type"] as string | undefined) ?? "application/octet-stream";
-      return { buffer: Buffer.from(arr), contentType };
+      return { buffer: Buffer.concat(chunks), contentType };
     }, this.retry);
   }
 }

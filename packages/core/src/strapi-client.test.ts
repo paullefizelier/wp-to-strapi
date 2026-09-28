@@ -113,3 +113,39 @@ describe("StrapiClient publication", () => {
     expect(calls[0]?.body).toEqual({ data: {} });
   });
 });
+
+describe("multipart upload body", () => {
+  it("is a form Strapi (or any parser) reads back: file bytes, name, type and fileInfo", async () => {
+    const { multipart } = await import("./strapi-client.js");
+    const bytes = Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x0d, 0x0a, 0x2d, 0x2d]);
+    const { body, contentType } = multipart([
+      { name: "files", fileName: 'photo "été".jpg', contentType: "image/jpeg", data: bytes },
+      { name: "fileInfo", data: Buffer.from(JSON.stringify({ alternativeText: "Légende" })) },
+    ]);
+    const form = await new Response(body, { headers: { "content-type": contentType } }).formData();
+    const file = form.get("files") as File;
+    // Quotes travel percent-encoded, as browsers send them; the parser gives the name back.
+    expect(file.name).toBe('photo "été".jpg');
+    expect(file.type).toBe("image/jpeg");
+    expect(Buffer.from(await file.arrayBuffer())).toEqual(bytes);
+    expect(JSON.parse(form.get("fileInfo") as string)).toEqual({ alternativeText: "Légende" });
+  });
+
+  it("sends a plain Buffer with its multipart content-type", async () => {
+    calls.length = 0;
+    const seen: Array<{ headers?: Record<string, string>; body?: unknown }> = [];
+    const undici = await import("undici");
+    (undici.request as unknown as { mockImplementationOnce: (f: unknown) => void }).mockImplementationOnce(
+      async (_url: string, opts: { headers?: Record<string, string>; body?: unknown }) => {
+        seen.push(opts);
+        return { statusCode: 201, headers: {}, body: { json: async () => [{ id: 7, url: "/u/a.jpg" }], text: async () => "" } };
+      },
+    );
+    const client = new StrapiClient({ baseUrl: "https://cms.test", token: "t" });
+    const up = await client.uploadFile({ buffer: Buffer.from("x"), fileName: "a.jpg", contentType: "image/jpeg" });
+    expect(up.id).toBe(7);
+    expect(Buffer.isBuffer(seen[0]?.body)).toBe(true);
+    expect(seen[0]?.headers?.["content-type"]).toMatch(/^multipart\/form-data; boundary=/);
+    expect(seen[0]?.headers?.["content-length"]).toBe(String((seen[0]?.body as Buffer).length));
+  });
+});

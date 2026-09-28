@@ -1,4 +1,5 @@
-import { request, FormData, type Dispatcher } from "undici";
+import { randomBytes } from "node:crypto";
+import { request, type Dispatcher } from "undici";
 import type { ContentTypeSummary, TargetField, TargetSchema } from "./introspect.js";
 import { HttpStatusError, parseRetryAfter, withRetry } from "./retry.js";
 import type { WriteOptions } from "./strapi-adapter.js";
@@ -184,22 +185,25 @@ export class StrapiClient {
     alternativeText?: string;
     caption?: string;
   }): Promise<StrapiUploadFile> {
-    const form = new FormData();
-    const blob = new Blob([args.buffer], { type: args.contentType });
-    form.append("files", blob, args.fileName);
     const fileInfo: Record<string, string> = {};
-    if (args.alternativeText)
-      fileInfo.alternativeText = args.alternativeText;
+    if (args.alternativeText) fileInfo.alternativeText = args.alternativeText;
     if (args.caption) fileInfo.caption = args.caption;
-    if (Object.keys(fileInfo).length > 0) {
-      form.append("fileInfo", JSON.stringify(fileInfo));
-    }
+    const { body, contentType } = multipart([
+      { name: "files", fileName: args.fileName, contentType: args.contentType, data: args.buffer },
+      ...(Object.keys(fileInfo).length > 0
+        ? [{ name: "fileInfo", data: Buffer.from(JSON.stringify(fileInfo)) }]
+        : []),
+    ]);
 
     const arr = await withRetry(async () => {
       const res = await request(`${this.baseUrl}/api/upload`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${this.opts.token}` },
-        body: form,
+        headers: {
+          Authorization: `Bearer ${this.opts.token}`,
+          "content-type": contentType,
+          "content-length": String(body.length),
+        },
+        body,
       });
       if (res.statusCode < 200 || res.statusCode >= 300) {
         const text = await res.body.text();
@@ -362,4 +366,27 @@ export class StrapiClient {
   async publish(uid: string, documentId: string, pluralOverride?: string): Promise<void> {
     await this.update(uid, documentId, {} as object, pluralOverride, { status: "published" });
   }
+}
+
+/**
+ * A multipart/form-data body as plain bytes. Built by hand rather than with undici's FormData:
+ * a Buffer is the one body every undici version sends the same way, over HTTP/1 or HTTP/2 —
+ * the FormData path differs between the undici copies a host app may resolve.
+ */
+export function multipart(
+  parts: ReadonlyArray<{ name: string; data: Buffer; fileName?: string; contentType?: string }>,
+): { body: Buffer; contentType: string } {
+  const boundary = `----wp-to-strapi-${randomBytes(12).toString("hex")}`;
+  // Quotes and line breaks would end the header early; percent-encode them like browsers do.
+  const quote = (v: string) => v.replace(/"/g, "%22").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+  const chunks: Buffer[] = [];
+  for (const part of parts) {
+    const disposition =
+      `Content-Disposition: form-data; name="${quote(part.name)}"` +
+      (part.fileName !== undefined ? `; filename="${quote(part.fileName)}"` : "");
+    const type = part.fileName !== undefined ? `\r\nContent-Type: ${part.contentType || "application/octet-stream"}` : "";
+    chunks.push(Buffer.from(`--${boundary}\r\n${disposition}${type}\r\n\r\n`, "utf8"), part.data, Buffer.from("\r\n"));
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+  return { body: Buffer.concat(chunks), contentType: `multipart/form-data; boundary=${boundary}` };
 }

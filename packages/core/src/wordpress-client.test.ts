@@ -32,6 +32,10 @@ vi.mock("undici", async () => {
           text: async () => "[]",
           dump: async () => {},
           arrayBuffer: async () => new TextEncoder().encode("file").buffer,
+          async *[Symbol.asyncIterator]() {
+            yield Buffer.from("fi");
+            yield Buffer.from("le");
+          },
         },
       };
     }),
