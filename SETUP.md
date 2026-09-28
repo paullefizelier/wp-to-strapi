@@ -11,7 +11,7 @@ End-to-end walkthrough from a fresh clone to a fully working dev environment, re
 
 ## 1. Remplacer le placeholder de scope (à faire **avant** d'installer)
 
-Le repo utilise `paullefizelier` partout comme sentinelle. Tant qu'il n'est pas remplacé, `pnpm install` ne sait pas que `@paullefizelier/wp-to-strapi-core` vit dans `packages/core` et tente de le télécharger depuis npm → **404**.
+Le repo utilise le scope `paullefizelier`. Pour publier sous un autre scope npm, remplace-le partout. Inutile pour travailler en local : les paquets internes sont reliés depuis le dépôt quel que soit leur nom.
 
 Depuis la racine du repo, choisis ton scope npm puis exécute :
 
@@ -154,7 +154,9 @@ Pour avoir une fiche officielle Strapi Market avec badge, il faut ouvrir un PR s
 
 | Symptôme | Cause | Fix |
 |----------|-------|-----|
-| `ERR_PNPM_FETCH_404 @paullefizelier/...` | Placeholder pas remplacé | Refaire le `sed` de l'étape 1 |
+| `ERR_PNPM_FETCH_404 @paullefizelier/...` | pnpm cherche un paquet interne sur le registre npm au lieu de le prendre dans le dépôt (`linkWorkspacePackages` absent de `pnpm-workspace.yaml`) | `git pull` pour récupérer le `pnpm-workspace.yaml` à jour, puis `rm -rf node_modules */*/node_modules && pnpm install` |
+| `ERR_PNPM_IGNORED_BUILDS` (pnpm 10/11) | pnpm n'exécute pas les scripts d'installation non autorisés | Liste `allowBuilds` de `pnpm-workspace.yaml` (déjà remplie pour esbuild, @swc/core, vue-demi) |
+| `sh: tsc: command not found` | L'installation a échoué avant la fin : les dépendances ne sont pas là | Corriger l'erreur d'installation, puis relancer `npm ci` (ou `pnpm install`) |
 | `ERR_PNPM_NO_MATCHING_VERSION` sur un package interne | `pnpm-workspace.yaml` absent ou mal configuré | Vérifier qu'il existe à la racine |
 | `npm error 402 Payment Required` au publish | Scoped package en privé par défaut | Vérifier `publishConfig.access: "public"` dans le `package.json` concerné |
 | `npm error 403 Forbidden` au publish | Mauvais token ou 2FA "auth and writes" | Régénérer un token *Automation*, mettre 2FA en *auth only* |

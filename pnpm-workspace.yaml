@@ -1,3 +1,20 @@
 packages:
   - "packages/*"
   - "apps/*"
+
+# The internal packages depend on each other by version ("^0.1.0"), which npm workspaces link
+# automatically. pnpm (9+) would look them up on the npm registry instead — and 404.
+linkWorkspacePackages: true
+
+# Same pin as "overrides" in package.json: vaul-vue (under @nuxt/ui) asks for @vueuse/core 10,
+# which lacks `createRef` and breaks the production server.
+overrides:
+  vaul-vue>@vueuse/core: ^14.4.0
+
+# pnpm 10+ runs no install scripts unless allowed (pnpm 11 fails the install instead).
+# These ship native binaries or pick their Vue build at install; core-js-pure only prints ads.
+allowBuilds:
+  esbuild: true
+  "@swc/core": true
+  vue-demi: true
+  core-js-pure: false
