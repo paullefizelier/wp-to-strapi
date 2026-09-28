@@ -36,6 +36,9 @@ export const NOTICE_CODES = [
   "wp.redirected",
   "media.scoped",
   "ai.failed",
+  "preflight.noCorrelation",
+  "preflight.unknownFields",
+  "preflight.optionalFields",
 ] as const;
 
 export type NoticeCode = (typeof NOTICE_CODES)[number];
@@ -68,6 +71,9 @@ export interface NoticeParamsByCode {
   "wp.redirected": { from: string; to: string };
   "media.scoped": { used: number; total: number };
   "ai.failed": { entry: string; error: string };
+  "preflight.noCorrelation": { uid: string; field: string };
+  "preflight.unknownFields": { uid: string; fields: string };
+  "preflight.optionalFields": { uid: string; fields: string };
 }
 
 export type NoticeParams<C extends NoticeCode = NoticeCode> = NoticeParamsByCode[C];
@@ -132,6 +138,14 @@ const EN: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
   "media.scoped": (p) =>
     `Media: ${p.used} of ${p.total} files are used by the entries being imported — only those ` +
     `are migrated.`,
+  "preflight.noCorrelation": (p) =>
+    `${p.uid} has no "${p.field}" field: the migrator uses it to find entries it already ` +
+    `imported. Add it (an integer field "${p.field}"), or pick another correlation field such as slug.`,
+  "preflight.unknownFields": (p) =>
+    `${p.uid} has no field ${p.fields}: add it in the Content-Type Builder, or remove it from the mapping.`,
+  "preflight.optionalFields": (p) =>
+    `${p.uid} has no field ${p.fields}: entries that have a value for it will be refused. ` +
+    `Add the field, or remove it from the mapping.`,
   "ai.failed": (p) => `${p.entry}: the AI assistant failed (${p.error}) — imported without its fields.`,
   "failures.hint": () => "Re-run with retryFailed (CLI: --retry-failed) to retry just these.",
 };

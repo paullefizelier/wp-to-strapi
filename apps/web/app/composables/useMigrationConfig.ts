@@ -8,6 +8,7 @@ const empty = (): MigrationConfigInput => ({
     baseUrl: "http://localhost:1337",
     token: "",
     postUid: "api::post.post",
+    correlationField: "wpId",
     pageUid: "api::page.page",
   },
   concurrency: 4,
@@ -45,7 +46,8 @@ export function useMigrationConfig() {
       if (raw) {
         try {
           const parsed = JSON.parse(raw) as Partial<MigrationConfigInput>;
-          cfg.value = { ...empty(), ...parsed };
+          // Nested defaults too: a config saved before a field existed still gets it.
+          cfg.value = { ...empty(), ...parsed, strapi: { ...empty().strapi, ...(parsed.strapi ?? {}) } };
         } catch {
           // ignore
         }

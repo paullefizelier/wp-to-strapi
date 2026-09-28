@@ -31,6 +31,8 @@ export const MigrationConfigSchema = z.object({
     baseUrl: z.string().url(),
     token: z.string().min(1),
     postUid: z.string().min(1).default("api::post.post"),
+    /** Field that identifies an entry already imported (wpId, slug…). */
+    correlationField: z.string().min(1).default("wpId"),
     pageUid: z.string().min(1).default("api::page.page"),
     postPluralPath: z.string().optional(),
     pagePluralPath: z.string().optional(),

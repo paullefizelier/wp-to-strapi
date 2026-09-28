@@ -61,6 +61,17 @@ const FR: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
   "media.scoped": (p) =>
     `Médias : ${p.used} fichier(s) sur ${p.total} sont utilisés par les contenus importés — ` +
     `seuls ceux-là sont migrés.`,
+  "preflight.noCorrelation": (p) =>
+    `${p.uid} n'a pas de champ « ${p.field} » : l'outil s'en sert pour retrouver ce qu'il a déjà ` +
+    `importé (et éviter les doublons). Ajoutez-le dans Strapi (Content-Type Builder → champ ` +
+    `Nombre, entier, nommé « ${p.field} »), ou choisissez un autre champ de correspondance, ` +
+    `par exemple « slug », à l'étape Destination.`,
+  "preflight.unknownFields": (p) =>
+    `${p.uid} n'a pas de champ ${p.fields} : ajoutez-le dans le Content-Type Builder de Strapi, ` +
+    `ou retirez-le du mapping.`,
+  "preflight.optionalFields": (p) =>
+    `${p.uid} n'a pas de champ ${p.fields} : les entrées qui ont une valeur pour ce champ seront ` +
+    `refusées par Strapi. Ajoutez le champ, ou retirez-le du mapping.`,
   "ai.failed": (p) =>
     `${p.entry} : l'assistant IA a échoué (${p.error}) — entrée importée sans ses champs IA.`,
   "failures.hint": () =>

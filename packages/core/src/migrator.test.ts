@@ -1252,3 +1252,80 @@ describe("AI assistant", () => {
     expect(item?.aiFields).toEqual(["resume"]);
   });
 });
+
+describe("Preflight: what Strapi would refuse", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  function withSchema(fields: string[]) {
+    const strapi = fakeStrapi();
+    const lookups: Array<{ field: string; value: unknown }> = [];
+    strapi.adapter.describeTarget = async (uid: string) => ({
+      uid,
+      source: "schema" as const,
+      fields: fields.map((name) => ({ name })),
+    });
+    strapi.adapter.findOneBy = async (_uid, field, value) => {
+      lookups.push({ field, value });
+      return null;
+    };
+    return { strapi, lookups };
+  }
+
+  function migrator(strapi: ReturnType<typeof fakeStrapi>, over: Record<string, unknown> = {}) {
+    const events: MigratorEvent[] = [];
+    const m = new Migrator(
+      buildConfig({
+        wp: { baseUrl: WP },
+        strapi: { baseUrl: "https://cms.example.com", token: "t", ...((over.strapi as object) ?? {}) },
+        stateFile: join(dir, "state.json"),
+        concurrency: 1,
+        ...Object.fromEntries(Object.entries(over).filter(([k]) => k !== "strapi")),
+      }),
+      { strapi: strapi.adapter, wp: fakeWp().wp },
+    );
+    m.on("event", (e) => events.push(e));
+    return { m, events };
+  }
+
+  const codes = (events: MigratorEvent[]) =>
+    events.flatMap((e) => (e.type === "log" && e.code?.startsWith("preflight.") ? [`${e.level}:${e.code}`] : []));
+
+  it("stops before writing anything when the content-type has no correlation field", async () => {
+    const { strapi } = withSchema(["title", "slug", "content", "excerpt", "cover", "categories", "tags"]);
+    const { m, events } = migrator(strapi);
+    await expect(m.run({ only: ["media", "posts"] })).rejects.toThrow(/has no "wpId" field.*Nothing was written/);
+    expect(strapi.created).toHaveLength(0);
+    expect(codes(events)).toEqual(["error:preflight.noCorrelation"]);
+  });
+
+  it("stops on a mapped field Strapi does not declare, warns on one sent only when set", async () => {
+    const { strapi } = withSchema(["title", "slug", "content", "wpId", "cover", "categories"]);
+    const { m, events } = migrator(strapi);
+    await expect(m.run({ only: ["posts"] })).rejects.toThrow(/has no field excerpt/);
+    expect(codes(events)).toEqual(["error:preflight.unknownFields", "warn:preflight.optionalFields"]);
+  });
+
+  it("only reports in a dry run", async () => {
+    const { strapi } = withSchema(["title"]);
+    const { m, events } = migrator(strapi, { dryRun: true });
+    await m.run({ only: ["posts"] });
+    expect(codes(events)).toContain("error:preflight.noCorrelation");
+  });
+
+  it("finds existing entries by the value the mapping writes — the slug when correlating on slug", async () => {
+    const { strapi, lookups } = withSchema(["title", "slug", "content", "excerpt", "cover", "categories", "tags"]);
+    const { m } = migrator(strapi, { strapi: { correlationField: "slug" } });
+    await m.run({ only: ["posts"] });
+    expect(lookups).toEqual([
+      { field: "slug", value: "with-image" },
+      { field: "slug", value: "draft-one" },
+    ]);
+    expect(strapi.created).toHaveLength(2);
+  });
+});

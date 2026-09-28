@@ -93,6 +93,19 @@ export function mediaFileName(m: Pick<WpMedia, "source_url" | "mime_type">): str
   return name;
 }
 
+/**
+ * What identifies an entry in Strapi: the value the mapping writes into the correlation field
+ * (the WordPress id for `wpId`, the slug for `slug`…), the WordPress id when it writes none.
+ */
+function correlationValue(
+  data: Record<string, unknown>,
+  field: string,
+  wpId: number,
+): string | number {
+  const v = data[field];
+  return typeof v === "string" || typeof v === "number" ? v : wpId;
+}
+
 /** What any post-like entry says about itself, before anything is written. */
 function entryInfo(p: WpPost | WpPage, uid?: string, route?: string): ItemDetails {
   return {
@@ -371,7 +384,7 @@ export class Migrator extends EventEmitter {
       : restBase
         ? (set.custom?.[restBase] ?? set.post)
         : set[kind];
-    return mergeMappings(set.common, configured ?? (isTerm ? defaultTermMapping() : defaultEntryMapping()));
+    return mergeMappings(set.common, configured ?? (isTerm ? this.builtIn(defaultTermMapping()) : this.builtIn(defaultEntryMapping())));
   }
 
   /**
@@ -549,6 +562,7 @@ export class Migrator extends EventEmitter {
     const kinds = opts.only ? configured.filter((k) => opts.only?.includes(k)) : configured;
     this.runKinds = kinds;
     this.fire({ type: "run-start", at: new Date().toISOString(), kinds });
+    await this.preflightTargets(kinds);
 
     const extraStatuses = this.cfg.statuses.filter((st) => st !== "publish");
     if (extraStatuses.length > 0 && !this.wp.authenticated) {
@@ -993,6 +1007,108 @@ export class Migrator extends EventEmitter {
     return this.cfg.taxonomies.some((t) => t.restBase === taxonomy);
   }
 
+  /**
+   * Read each destination's schema before anything is written, and stop on what Strapi would
+   * refuse for every single entry: a correlation field the content-type lacks (the lookup fails
+   * with "Invalid key") or a mapped field it does not declare. A dry run reports and goes on.
+   * Silent when the schema cannot be read (no content-type builder access): nothing to check.
+   */
+  private async preflightTargets(kinds: Kind[]): Promise<void> {
+    if (!this.strapi.describeTarget) return;
+    const st = this.cfg.strapi;
+    const set = this.cfg.mapping ?? {};
+    const targets: Array<{ uid: string; plural?: string; rows: FieldMapping[]; single?: boolean }> = [];
+    const routesOnly = this.resolvedRoutes.length > 0 && this.cfg.routing.unmatched === "skip";
+    for (const from of ["posts", "pages"] as const) {
+      if (!kinds.includes(from)) continue;
+      const kind = from === "posts" ? "post" : "page";
+      if (!routesOnly) {
+        targets.push({
+          uid: from === "posts" ? st.postUid : st.pageUid,
+          plural: from === "posts" ? st.postPluralPath : st.pagePluralPath,
+          rows: this.mappingFor(kind),
+        });
+      }
+      for (const { route } of this.resolvedRoutes) {
+        if ((route.from ?? "posts") !== from) continue;
+        targets.push({ uid: route.uid, plural: route.pluralPath, rows: this.mappingFor(kind, undefined, route.name) });
+      }
+    }
+    if (kinds.includes("custom")) {
+      for (const t of this.cfg.customTypes) {
+        targets.push({ uid: t.uid, plural: t.pluralPath, rows: this.mappingFor("post", t.restBase), single: t.single });
+      }
+    }
+    if (kinds.includes("categories") && st.categoryUid) {
+      targets.push({ uid: st.categoryUid, plural: st.categoryPluralPath, rows: this.termMapping("categories") });
+    }
+    if (kinds.includes("tags") && st.tagUid) {
+      targets.push({ uid: st.tagUid, plural: st.tagPluralPath, rows: this.termMapping("tags") });
+    }
+    if (kinds.includes("taxonomies")) {
+      for (const t of this.cfg.taxonomies) {
+        targets.push({ uid: t.uid, plural: t.pluralPath, rows: this.termMapping(t.restBase) });
+      }
+    }
+    if (kinds.includes("authors") && st.authorUid) {
+      targets.push({ uid: st.authorUid, plural: st.authorPluralPath, rows: mergeMappings(set.common, set.author ?? this.builtIn(defaultAuthorMapping())) });
+    }
+    if (kinds.includes("comments") && st.commentUid) {
+      targets.push({ uid: st.commentUid, plural: st.commentPluralPath, rows: mergeMappings(set.common, set.comment ?? this.builtIn(defaultCommentMapping())) });
+    }
+    if (kinds.includes("menus") && st.menuUid) {
+      targets.push({ uid: st.menuUid, plural: st.menuPluralPath, rows: mergeMappings(set.common, set.menu ?? this.builtIn(defaultMenuMapping())) });
+    }
+
+    const problems: string[] = [];
+    const seen = new Set<string>();
+    for (const t of targets) {
+      const key = `${t.uid}|${t.rows.map((r) => r.target).join(",")}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      let fields: Set<string>;
+      try {
+        const schema = await this.strapi.describeTarget(t.uid, t.plural);
+        if (schema.source !== "schema") continue;
+        fields = new Set(schema.fields.map((f) => f.name));
+      } catch {
+        continue;
+      }
+      if (!t.single && !fields.has(st.correlationField)) {
+        this.say(notice("preflight.noCorrelation", { uid: t.uid, field: st.correlationField }, "error"));
+        problems.push(`${t.uid} has no "${st.correlationField}" field`);
+      }
+      // A field always written fails every entry; one written only when it has a value
+      // (omitEmpty: featured image, terms) fails only those — worth a warning, not a stop.
+      const unknown = new Map<string, boolean>();
+      for (const row of t.rows) {
+        const name = row.target.split(".")[0] as string;
+        if (!name || fields.has(name) || name === st.correlationField) continue;
+        unknown.set(name, (unknown.get(name) ?? false) || !row.omitEmpty);
+      }
+      const always = [...unknown].filter(([, a]) => a).map(([n]) => n);
+      const sometimes = [...unknown].filter(([, a]) => !a).map(([n]) => n);
+      if (always.length > 0) {
+        this.say(notice("preflight.unknownFields", { uid: t.uid, fields: always.join(", ") }, "error"));
+        problems.push(`${t.uid} has no field ${always.join(", ")}`);
+      }
+      if (sometimes.length > 0) {
+        this.say(notice("preflight.optionalFields", { uid: t.uid, fields: sometimes.join(", ") }, "warn"));
+      }
+    }
+    if (problems.length > 0 && !this.cfg.dryRun) {
+      throw new Error(`Strapi would refuse every entry: ${problems.join("; ")}. Nothing was written.`);
+    }
+  }
+
+  /**
+   * A built-in mapping writes the WordPress id to `wpId`, the default correlation field. When
+   * entries are matched on another field (a slug), that column may not exist in Strapi: drop it.
+   */
+  private builtIn(rows: FieldMapping[]): FieldMapping[] {
+    return this.cfg.strapi.correlationField === "wpId" ? rows : rows.filter((r) => r.target !== "wpId");
+  }
+
   /** See {@link PreviewItem.pending}. */
   private pendingFields(
     entry: unknown,
@@ -1030,7 +1146,7 @@ export class Migrator extends EventEmitter {
         : taxonomy === "tags"
           ? set.tag
           : set.taxonomy?.[taxonomy];
-    return mergeMappings(set.common, own ?? defaultTermMapping());
+    return mergeMappings(set.common, own ?? this.builtIn(defaultTermMapping()));
   }
 
   // ----- Authors -----
@@ -1055,7 +1171,7 @@ export class Migrator extends EventEmitter {
     const info: ItemDetails = { title: user.name, slug: user.slug, source: user.link, target: uid };
     try {
       const set = this.cfg.mapping ?? {};
-      const mapped = applyMapping(user, mergeMappings(set.common, set.author ?? defaultAuthorMapping()), {
+      const mapped = applyMapping(user, mergeMappings(set.common, set.author ?? this.builtIn(defaultAuthorMapping())), {
         state: this.state.get(),
         strapiBaseUrl: this.cfg.strapi.baseUrl,
       });
@@ -1136,7 +1252,7 @@ export class Migrator extends EventEmitter {
       const set = this.cfg.mapping ?? {};
       const mapped = applyMapping(
         comment,
-        mergeMappings(set.common, set.comment ?? defaultCommentMapping()),
+        mergeMappings(set.common, set.comment ?? this.builtIn(defaultCommentMapping())),
         { state: this.state.get(), strapiBaseUrl: this.cfg.strapi.baseUrl },
       );
       for (const n of mapped.notices) this.say(n);
@@ -1218,7 +1334,7 @@ export class Migrator extends EventEmitter {
       const items: WpMenuItem[] = [];
       for await (const item of this.wp.menuItems(menu.id)) items.push(item);
       const set = this.cfg.mapping ?? {};
-      const mapped = applyMapping(menu, mergeMappings(set.common, set.menu ?? defaultMenuMapping()), {
+      const mapped = applyMapping(menu, mergeMappings(set.common, set.menu ?? this.builtIn(defaultMenuMapping())), {
         state: this.state.get(),
         strapiBaseUrl: this.cfg.strapi.baseUrl,
         virtuals: { $items: this.buildMenuTree(items) },
@@ -1387,12 +1503,8 @@ export class Migrator extends EventEmitter {
     wpId: number,
     data: Record<string, unknown>,
   ): Promise<{ documentId: string; action: WriteAction }> {
-    const existing = await this.strapi.findOneBy(
-      uid,
-      this.cfg.strapi.correlationField,
-      wpId,
-      pluralOverride,
-    );
+    const field = this.cfg.strapi.correlationField;
+    const existing = await this.strapi.findOneBy(uid, field, correlationValue(data, field, wpId), pluralOverride);
     const saved = existing
       ? await this.strapi.update(uid, existing.documentId, data, pluralOverride, {
           status: "published",
@@ -1893,12 +2005,8 @@ export class Migrator extends EventEmitter {
         item: { ...item, action: "updated", documentId: saved.documentId },
       };
     }
-    const existing = await this.strapi.findOneBy(
-      uid,
-      this.cfg.strapi.correlationField,
-      p.id,
-      pluralOverride,
-    );
+    const field = this.cfg.strapi.correlationField;
+    const existing = await this.strapi.findOneBy(uid, field, correlationValue(data, field, p.id), pluralOverride);
     const saved = existing
       ? await this.strapi.update(uid, existing.documentId, data, pluralOverride, write)
       : await this.strapi.create(uid, data, pluralOverride, write);

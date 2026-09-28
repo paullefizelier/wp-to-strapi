@@ -488,6 +488,19 @@ async function startMigration() {
               </UFormField>
             </div>
 
+            <UFormField
+              label="Champ de correspondance (anti-doublons)"
+              description="Champ Strapi qui identifie une entrée déjà importée : une relance la met à jour au lieu d'en créer une seconde. « wpId » (un champ Nombre entier à ajouter dans vos content-types) est le plus sûr ; « slug » marche sans rien ajouter si vos slugs sont uniques."
+            >
+              <USelectMenu
+                v-model="config.strapi.correlationField"
+                :items="['wpId', 'slug']"
+                create-item="always"
+                class="w-full sm:w-72"
+                @create="(v: string) => (config.strapi.correlationField = v)"
+              />
+            </UFormField>
+
             <UAlert
               v-if="strapiResult"
               :color="strapiResult.ok ? 'success' : 'error'"

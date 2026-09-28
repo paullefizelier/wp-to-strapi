@@ -124,6 +124,7 @@ function loadConfigFromEnv() {
       menuUid: process.env.STRAPI_MENU_UID,
       parentField: process.env.STRAPI_PARENT_FIELD,
       termParentField: process.env.STRAPI_TERM_PARENT_FIELD,
+      correlationField: process.env.STRAPI_CORRELATION_FIELD,
     },
     concurrency: process.env.CONCURRENCY ? Number(process.env.CONCURRENCY) : undefined,
     retries: process.env.RETRIES ? Number(process.env.RETRIES) : undefined,
