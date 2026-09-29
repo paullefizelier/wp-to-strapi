@@ -35,11 +35,13 @@ export const NOTICE_CODES = [
   "routing.summary",
   "wp.redirected",
   "media.scoped",
+  "media.keptAsFile",
   "ai.failed",
   "preflight.noCorrelation",
   "preflight.correlationNotMapped",
   "preflight.correlationFallback",
   "preflight.unknownFields",
+  "preflight.unknownAiFields",
 ] as const;
 
 export type NoticeCode = (typeof NOTICE_CODES)[number];
@@ -71,12 +73,14 @@ export interface NoticeParamsByCode {
   "routing.summary": { counts: string };
   "wp.redirected": { from: string; to: string };
   "media.scoped": { used: number; total: number };
+  "media.keptAsFile": { file: string };
   "ai.failed": { entry: string; error: string };
   /** `mapping` names the mapping that writes to it: post, page, route:<name>, custom:<restBase>… */
   "preflight.noCorrelation": { uid: string; field: string; mapping: string; available: string };
   "preflight.correlationNotMapped": { uid: string; field: string; mapping: string };
   "preflight.correlationFallback": { uid: string; field: string; mapping: string };
   "preflight.unknownFields": { uid: string; fields: string; mapping: string; available: string };
+  "preflight.unknownAiFields": { uid: string; fields: string; mapping: string; available: string };
 }
 
 export type NoticeParams<C extends NoticeCode = NoticeCode> = NoticeParamsByCode[C];
@@ -153,6 +157,11 @@ const EN: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
   "preflight.unknownFields": (p) =>
     `${p.uid} has no field ${p.fields} (written by mapping "${p.mapping}"). Its fields: ` +
     `${p.available || "?"}. Rename them in that mapping, or add them in Strapi.`,
+  "preflight.unknownAiFields": (p) =>
+    `${p.uid} has no field ${p.fields}, which an AI rule for "${p.mapping}" fills. Its fields: ` +
+    `${p.available || "?"}. Point the rule at an existing field, or scope it to the content-types that have it.`,
+  "media.keptAsFile": (p) =>
+    `${p.file}: Strapi could not process it as an image — uploaded as a plain file (no generated sizes).`,
   "ai.failed": (p) => `${p.entry}: the AI assistant failed (${p.error}) — imported without its fields.`,
   "failures.hint": () => "Re-run with retryFailed (CLI: --retry-failed) to retry just these.",
 };

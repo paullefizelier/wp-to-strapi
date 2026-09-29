@@ -997,7 +997,17 @@ export class Migrator extends EventEmitter {
   private async preflightTargets(kinds: Kind[]): Promise<void> {
     const st = this.cfg.strapi;
     const set = this.cfg.mapping ?? {};
-    type Target = { uid: string; plural?: string; rows: FieldMapping[]; single?: boolean; mapping: string };
+    type Target = {
+      uid: string;
+      plural?: string;
+      rows: FieldMapping[];
+      single?: boolean;
+      mapping: string;
+      /** Fields the AI assistant may write on top of the mapping. */
+      ai?: string[];
+    };
+    const aiTargets = (kind: "post" | "page", restBase?: string, routeName?: string) =>
+      this.cfg.ai ? this.aiRulesFor(kind, restBase, routeName).map((r) => r.target) : [];
     const targets: Target[] = [];
     const routesOnly = this.resolvedRoutes.length > 0 && this.cfg.routing.unmatched === "skip";
     for (const from of ["posts", "pages"] as const) {
@@ -1009,6 +1019,7 @@ export class Migrator extends EventEmitter {
           plural: from === "posts" ? st.postPluralPath : st.pagePluralPath,
           rows: this.mappingFor(kind),
           mapping: kind,
+          ai: aiTargets(kind),
         });
       }
       for (const { route } of this.resolvedRoutes) {
@@ -1018,12 +1029,13 @@ export class Migrator extends EventEmitter {
           plural: route.pluralPath,
           rows: this.mappingFor(kind, undefined, route.name),
           mapping: `route:${route.name}`,
+          ai: aiTargets(kind, undefined, route.name),
         });
       }
     }
     if (kinds.includes("custom")) {
       for (const t of this.cfg.customTypes) {
-        targets.push({ uid: t.uid, plural: t.pluralPath, rows: this.mappingFor("post", t.restBase), single: t.single, mapping: `custom:${t.restBase}` });
+        targets.push({ uid: t.uid, plural: t.pluralPath, rows: this.mappingFor("post", t.restBase), single: t.single, mapping: `custom:${t.restBase}`, ai: aiTargets("post", t.restBase) });
       }
     }
     if (kinds.includes("categories") && st.categoryUid) {
@@ -1123,10 +1135,23 @@ export class Migrator extends EventEmitter {
         if (terms && !this.taxonomyMigrates(terms.slice("terms:".length))) continue;
         unknown.add(name);
       }
+      // "content" for a field created as "Content": say which one was meant.
+      const spelled = (name: string) => {
+        const match = [...fields].find((f) => f.toLowerCase() === name.toLowerCase());
+        return match ? `${name} (→ ${match})` : name;
+      };
       if (unknown.size > 0) {
-        const list = [...unknown].join(", ");
+        const list = [...unknown].map(spelled).join(", ");
         this.say(notice("preflight.unknownFields", { uid: t.uid, fields: list, mapping: t.mapping, available }, "error"));
         problems.push(`${t.uid} has no field ${list}`);
+      }
+      const aiUnknown = [...new Set((t.ai ?? []).map((target) => target.split(".")[0] as string))].filter(
+        (name) => name && !fields.has(name),
+      );
+      if (aiUnknown.length > 0) {
+        const list = aiUnknown.map(spelled).join(", ");
+        this.say(notice("preflight.unknownAiFields", { uid: t.uid, fields: list, mapping: t.mapping, available }, "error"));
+        problems.push(`${t.uid} has no field ${list} (AI rules)`);
       }
     }
     if (problems.length > 0 && !this.cfg.dryRun) {
@@ -1699,13 +1724,23 @@ export class Migrator extends EventEmitter {
         .catch((err: Error) => {
           throw new Error(`download ${m.source_url}: ${err.message}`);
         });
-      const uploaded = await this.strapi
-        .uploadFile({
+      const upload = (type: string) =>
+        this.strapi.uploadFile({
           buffer,
           fileName,
-          contentType: contentType || m.mime_type,
+          contentType: type,
           alternativeText: m.alt_text || decodeEntities(m.title?.rendered ?? ""),
           caption: decodeEntities(m.caption?.rendered ?? ""),
+        });
+      const type = contentType || m.mime_type;
+      const uploaded = await upload(type)
+        .catch(async (err: Error) => {
+          // Strapi's image processing rejects some real images (huge, 16-bit, odd colour
+          // profiles). Keep the file anyway, as a plain file without generated sizes.
+          if (!/not a valid image/i.test(err.message) || !type.startsWith("image/")) throw err;
+          const kept = await upload("application/octet-stream");
+          this.say(notice("media.keptAsFile", { file: fileName }, "warn"));
+          return kept;
         })
         .catch((err: Error) => {
           throw new Error(`upload to Strapi (${fileName}, ${buffer.length} B): ${err.message}`);

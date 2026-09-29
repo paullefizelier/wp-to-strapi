@@ -88,6 +88,13 @@ const FR: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
     `${p.uid} n'a pas de champ ${p.fields} (écrit par le mapping ${mappingLabel(p.mapping)}). ` +
     `Champs de ce content-type : ${p.available || "?"}. Renommez ces lignes dans le mapping ` +
     `(bouton « Lire les champs » pour les choisir), ou ajoutez les champs dans Strapi.`,
+  "preflight.unknownAiFields": (p) =>
+    `${p.uid} n'a pas de champ ${p.fields}, qu'une règle de l'assistant IA remplit (mapping ` +
+    `${mappingLabel(p.mapping)}). Champs de ce content-type : ${p.available || "?"}. Corrigez le ` +
+    `champ de la règle, ou réservez-la aux content-types qui l'ont (« Règles pour » dans la carte IA).`,
+  "media.keptAsFile": (p) =>
+    `${p.file} : Strapi n'a pas pu le traiter comme image — importé comme simple fichier (sans ` +
+    `tailles générées). Vérifiez-le dans la médiathèque.`,
   "ai.failed": (p) =>
     `${p.entry} : l'assistant IA a échoué (${p.error}) — entrée importée sans ses champs IA.`,
   "failures.hint": () =>

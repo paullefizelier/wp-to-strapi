@@ -1412,3 +1412,81 @@ describe("Preflight: field names as Strapi spells them", () => {
     }
   });
 });
+
+describe("Preflight: AI rules and misspelt fields", () => {
+  it("stops on an AI rule aimed at a field the content-type spells differently", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-"));
+    try {
+      const strapi = fakeStrapi();
+      strapi.adapter.describeTarget = async (uid: string) => ({
+        uid,
+        source: "schema" as const,
+        fields: ["Title", "Slug", "Content"].map((name) => ({ name })),
+      });
+      const events: MigratorEvent[] = [];
+      const m = new Migrator(
+        buildConfig({
+          wp: { baseUrl: WP },
+          strapi: { baseUrl: "https://cms.example.com", token: "t" },
+          stateFile: join(dir, "state.json"),
+          mapping: {
+            post: [
+              { target: "Title", source: "title.rendered" },
+              { target: "Slug", source: "slug" },
+              { target: "content", source: "$content" },
+            ],
+          },
+          ai: { provider: "gemini", model: "m", rules: { "*": [{ target: "content", instruction: "Nettoie" }] } },
+        }),
+        { strapi: strapi.adapter, wp: fakeWp().wp, ai: { generateJson: vi.fn() } },
+      );
+      m.on("event", (e) => events.push(e));
+      await expect(m.run({ only: ["posts"] })).rejects.toThrow(/content \(→ Content\)/);
+      const params = events.flatMap((e) =>
+        e.type === "log" && e.code?.startsWith("preflight.") ? [[e.code, (e.params as { fields?: string }).fields]] : [],
+      );
+      expect(params).toEqual([
+        ["preflight.correlationFallback", undefined],
+        ["preflight.unknownFields", "content (→ Content)"],
+        ["preflight.unknownAiFields", "content (→ Content)"],
+      ]);
+      expect(strapi.created).toHaveLength(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Media Strapi cannot process as an image", () => {
+  it("keeps the file as a plain upload", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-"));
+    try {
+      const strapi = fakeStrapi();
+      const types: string[] = [];
+      const original = strapi.adapter.uploadFile.bind(strapi.adapter);
+      strapi.adapter.uploadFile = async (args) => {
+        types.push(args.contentType);
+        if (args.contentType.startsWith("image/")) {
+          throw new Error('Strapi upload failed 400: {"error":{"message":"File is not a valid image"}}');
+        }
+        return original(args);
+      };
+      const events: MigratorEvent[] = [];
+      const m = new Migrator(
+        buildConfig({
+          wp: { baseUrl: WP },
+          strapi: { baseUrl: "https://cms.example.com", token: "t" },
+          stateFile: join(dir, "state.json"),
+        }),
+        { strapi: strapi.adapter, wp: fakeWp().wp },
+      );
+      m.on("event", (e) => events.push(e));
+      await m.run({ only: ["media"] });
+      expect(types).toEqual(["image/jpeg", "application/octet-stream"]);
+      expect(events.some((e) => e.type === "item-ok" && e.kind === "media")).toBe(true);
+      expect(events.some((e) => e.type === "log" && e.code === "media.keptAsFile")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
