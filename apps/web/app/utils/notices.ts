@@ -95,6 +95,16 @@ const FR: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
   "media.keptAsFile": (p) =>
     `${p.file} : Strapi n'a pas pu le traiter comme image — importé comme simple fichier (sans ` +
     `tailles générées). Vérifiez-le dans la médiathèque.`,
+  "preflight.systemDate": (p) =>
+    `${p.uid} : « ${p.field} » (mapping ${mappingLabel(p.mapping)}) est rempli par Strapi à chaque ` +
+    `écriture et ne peut pas être envoyé. Mettez plutôt la date WordPress dans un champ date à vous.`,
+  "preflight.noDate": (p) =>
+    `${p.uid} (mapping ${mappingLabel(p.mapping)}) : aucun champ date n'est rempli, les entrées auront ` +
+    `la date d'aujourd'hui (Strapi fixe lui-même createdAt/publishedAt). ` +
+    (p.fields
+      ? `Pour garder la date WordPress : ajoutez la ligne date_gmt → ${p.fields} avec la transformation « date ».`
+      : `Pour garder la date WordPress : ajoutez un champ « Date » (type Date, format date et heure) au ` +
+        `content-type, puis la ligne date_gmt → ce champ avec la transformation « date ».`),
   "ai.failed": (p) =>
     `${p.entry} : l'assistant IA a échoué (${p.error}) — entrée importée sans ses champs IA.`,
   "failures.hint": () =>

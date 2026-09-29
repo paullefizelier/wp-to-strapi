@@ -93,6 +93,9 @@ export function mediaFileName(m: Pick<WpMedia, "source_url" | "mime_type">): str
   return name;
 }
 
+/** Timestamps Strapi sets on every write; the REST API refuses them in a payload. */
+const SYSTEM_DATES = new Set(["createdAt", "updatedAt", "publishedAt"]);
+
 /** Maintained by Strapi itself — never a mapping target, never worth listing. */
 const SYSTEM_FIELDS = new Set([
   "id", "documentId", "createdAt", "updatedAt", "publishedAt", "createdBy", "updatedBy",
@@ -1069,10 +1072,14 @@ export class Migrator extends EventEmitter {
       const written = new Set(t.rows.map((r) => r.target.split(".")[0] as string));
 
       let fields: Set<string> | null = null;
+      let types = new Map<string, string | undefined>();
       if (this.strapi.describeTarget) {
         try {
           const schema = await this.strapi.describeTarget(t.uid, t.plural);
-          if (schema.source === "schema") fields = new Set(schema.fields.map((f) => f.name));
+          if (schema.source === "schema") {
+            fields = new Set(schema.fields.map((f) => f.name));
+            types = new Map(schema.fields.map((f) => [f.name, f.type]));
+          }
         } catch {
           /* no content-type builder access: nothing to check against */
         }
@@ -1130,6 +1137,13 @@ export class Migrator extends EventEmitter {
       const unknown = new Set<string>();
       for (const row of t.rows) {
         const name = row.target.split(".")[0] as string;
+        // Strapi sets these itself and refuses them in a payload: say so, and what to do.
+        if (SYSTEM_DATES.has(name)) {
+          this.say(notice("preflight.systemDate", { uid: t.uid, field: name, mapping: t.mapping }, "error"));
+          problems.push(`${t.uid}: "${name}" is set by Strapi and cannot be written`);
+          reported.add(name);
+          continue;
+        }
         if (!name || fields.has(name) || reported.has(name)) continue;
         const terms = (row.transforms ?? []).find((x) => x.startsWith("terms:"));
         if (terms && !this.taxonomyMigrates(terms.slice("terms:".length))) continue;
@@ -1148,6 +1162,16 @@ export class Migrator extends EventEmitter {
       const aiUnknown = [...new Set((t.ai ?? []).map((target) => target.split(".")[0] as string))].filter(
         (name) => name && !fields.has(name),
       );
+      // createdAt/publishedAt become the import date: without a date field of its own, every
+      // imported entry looks published today.
+      const postLike = t.mapping === "post" || t.mapping === "page" || /^(route|custom):/.test(t.mapping);
+      if (postLike) {
+        const dateFields = [...types].filter(([n, ty]) => (ty === "date" || ty === "datetime") && !SYSTEM_DATES.has(n)).map(([n]) => n);
+        const written = new Set(t.rows.map((r) => r.target.split(".")[0]));
+        if (!dateFields.some((f) => written.has(f))) {
+          this.say(notice("preflight.noDate", { uid: t.uid, mapping: t.mapping, fields: dateFields.join(", ") }, "warn"));
+        }
+      }
       if (aiUnknown.length > 0) {
         const list = aiUnknown.map(spelled).join(", ");
         this.say(notice("preflight.unknownAiFields", { uid: t.uid, fields: list, mapping: t.mapping, available }, "error"));

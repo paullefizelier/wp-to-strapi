@@ -42,6 +42,8 @@ export const NOTICE_CODES = [
   "preflight.correlationFallback",
   "preflight.unknownFields",
   "preflight.unknownAiFields",
+  "preflight.systemDate",
+  "preflight.noDate",
 ] as const;
 
 export type NoticeCode = (typeof NOTICE_CODES)[number];
@@ -81,6 +83,9 @@ export interface NoticeParamsByCode {
   "preflight.correlationFallback": { uid: string; field: string; mapping: string };
   "preflight.unknownFields": { uid: string; fields: string; mapping: string; available: string };
   "preflight.unknownAiFields": { uid: string; fields: string; mapping: string; available: string };
+  "preflight.systemDate": { uid: string; field: string; mapping: string };
+  /** `fields`: the date fields the content-type has, possibly none. */
+  "preflight.noDate": { uid: string; mapping: string; fields: string };
 }
 
 export type NoticeParams<C extends NoticeCode = NoticeCode> = NoticeParamsByCode[C];
@@ -162,6 +167,15 @@ const EN: { [C in NoticeCode]: (p: NoticeParamsByCode[C]) => string } = {
     `${p.available || "?"}. Point the rule at an existing field, or scope it to the content-types that have it.`,
   "media.keptAsFile": (p) =>
     `${p.file}: Strapi could not process it as an image — uploaded as a plain file (no generated sizes).`,
+  "preflight.systemDate": (p) =>
+    `${p.uid}: "${p.field}" (mapping "${p.mapping}") is set by Strapi on every write and cannot be ` +
+    `sent. Map the WordPress date to a date field of your own instead.`,
+  "preflight.noDate": (p) =>
+    `${p.uid} (mapping "${p.mapping}"): no date field is filled, so entries will carry today's date ` +
+    `(Strapi sets createdAt/publishedAt itself). ` +
+    (p.fields
+      ? `Map date_gmt with the "date" transform to ${p.fields}.`
+      : `Add a Date field to the content-type and map date_gmt to it with the "date" transform.`),
   "ai.failed": (p) => `${p.entry}: the AI assistant failed (${p.error}) — imported without its fields.`,
   "failures.hint": () => "Re-run with retryFailed (CLI: --retry-failed) to retry just these.",
 };

@@ -1293,8 +1293,13 @@ describe("Preflight: what Strapi would refuse", () => {
     return { m, events };
   }
 
+  // The date warning has its own tests; these compare the blocking checks.
   const codes = (events: MigratorEvent[]) =>
-    events.flatMap((e) => (e.type === "log" && e.code?.startsWith("preflight.") ? [`${e.level}:${e.code}`] : []));
+    events.flatMap((e) =>
+      e.type === "log" && e.code?.startsWith("preflight.") && e.code !== "preflight.noDate"
+        ? [`${e.level}:${e.code}`]
+        : [],
+    );
 
   it("stops before writing anything when the content-type has no way to find imported entries", async () => {
     const { strapi } = withSchema(["titre", "contenu", "cover", "categories", "tags"]);
@@ -1443,7 +1448,9 @@ describe("Preflight: AI rules and misspelt fields", () => {
       m.on("event", (e) => events.push(e));
       await expect(m.run({ only: ["posts"] })).rejects.toThrow(/content \(→ Content\)/);
       const params = events.flatMap((e) =>
-        e.type === "log" && e.code?.startsWith("preflight.") ? [[e.code, (e.params as { fields?: string }).fields]] : [],
+        e.type === "log" && e.code?.startsWith("preflight.") && e.code !== "preflight.noDate"
+          ? [[e.code, (e.params as { fields?: string }).fields]]
+          : [],
       );
       expect(params).toEqual([
         ["preflight.correlationFallback", undefined],
@@ -1488,5 +1495,62 @@ describe("Media Strapi cannot process as an image", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Preflight: WordPress dates", () => {
+  async function preflight(fields: Array<{ name: string; type?: string }>, post: Array<Record<string, unknown>>) {
+    const dir = await mkdtemp(join(tmpdir(), "wp-to-strapi-"));
+    try {
+      const strapi = fakeStrapi();
+      strapi.adapter.describeTarget = async (uid: string) => ({ uid, source: "schema" as const, fields });
+      const events: MigratorEvent[] = [];
+      const m = new Migrator(
+        buildConfig({
+          wp: { baseUrl: WP },
+          strapi: { baseUrl: "https://cms.example.com", token: "t" },
+          stateFile: join(dir, "state.json"),
+          mapping: { post: post as never },
+        }),
+        { strapi: strapi.adapter, wp: fakeWp().wp },
+      );
+      m.on("event", (e) => events.push(e));
+      const outcome = await m.run({ only: ["posts"] }).then(() => "ok", (e: Error) => e.message);
+      const notices = events.flatMap((e) =>
+        e.type === "log" && e.code?.startsWith("preflight.") ? [{ code: e.code, level: e.level, params: e.params }] : [],
+      );
+      return { outcome, notices, created: strapi.created };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+  const base = [
+    { target: "title", source: "title.rendered" },
+    { target: "wpId", source: "id" },
+  ];
+
+  it("warns that entries will carry today's date, naming the date field to map", async () => {
+    const r = await preflight([{ name: "title" }, { name: "wpId" }, { name: "date", type: "datetime" }], base);
+    expect(r.outcome).toBe("ok");
+    expect(r.notices).toEqual([{ code: "preflight.noDate", level: "warn", params: { uid: "api::post.post", mapping: "post", fields: "date" } }]);
+  });
+
+  it("is quiet once the WordPress date is mapped — and writes it", async () => {
+    const r = await preflight(
+      [{ name: "title" }, { name: "wpId" }, { name: "date", type: "datetime" }],
+      [...base, { target: "date", source: "date_gmt", transforms: ["date"] }],
+    );
+    expect(r.notices).toEqual([]);
+    expect(r.created[0]?.data).toMatchObject({ date: "2024-05-01T08:00:00.000Z" });
+  });
+
+  it("stops on a mapping to createdAt/publishedAt, which Strapi sets itself", async () => {
+    const r = await preflight(
+      [{ name: "title" }, { name: "wpId" }],
+      [...base, { target: "publishedAt", source: "date_gmt", transforms: ["date"] }],
+    );
+    expect(r.outcome).toMatch(/"publishedAt" is set by Strapi/);
+    expect(r.notices.map((n) => n.code)).toEqual(["preflight.systemDate", "preflight.noDate"]);
+    expect(r.created).toHaveLength(0);
   });
 });
