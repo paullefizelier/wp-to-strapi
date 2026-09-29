@@ -31,6 +31,66 @@ export interface WpPage extends WpPost {
   menu_order: number;
 }
 
+/** A term from a WP taxonomy endpoint (/categories, /tags, or a custom taxonomy). */
+export interface WpTerm {
+  id: number;
+  name: string;
+  slug: string;
+  description?: string;
+  count?: number;
+  parent?: number;
+  taxonomy?: string;
+  link?: string;
+}
+
+/** A WordPress author. */
+export interface WpUser {
+  id: number;
+  name: string;
+  slug: string;
+  description?: string;
+  url?: string;
+  link?: string;
+  avatar_urls?: Record<string, string>;
+}
+
+/** A comment, as returned by /wp/v2/comments. */
+export interface WpComment {
+  id: number;
+  post: number;
+  parent: number;
+  author: number;
+  author_name: string;
+  author_url?: string;
+  date_gmt: string;
+  content: WpRendered;
+  status: string;
+  link?: string;
+}
+
+/** A navigation menu (WP 5.9+, authenticated). */
+export interface WpMenu {
+  id: number;
+  name: string;
+  slug: string;
+  description?: string;
+  locations?: string[];
+}
+
+export interface WpMenuItem {
+  id: number;
+  title: WpRendered | string;
+  url: string;
+  status: string;
+  parent: number;
+  menu_order: number;
+  object?: string;
+  object_id?: number;
+  type?: string;
+  target?: string;
+  menus?: number;
+}
+
 export interface WpMedia {
   id: number;
   date: string;
@@ -47,6 +107,8 @@ export interface WpMedia {
     height?: number;
     file?: string;
     filesize?: number;
+    /** WP's generated variants (thumbnail, medium, large…), keyed by size name. */
+    sizes?: Record<string, { file?: string; width?: number; height?: number; source_url?: string }>;
   };
 }
 
@@ -58,6 +120,8 @@ export interface StrapiUploadFile {
   mime: string;
   width?: number;
   height?: number;
+  /** Responsive variants Strapi generated for images (thumbnail, small, medium, large). */
+  formats?: Record<string, { url?: string; width?: number } | undefined> | null;
 }
 
 export interface StrapiEntry {

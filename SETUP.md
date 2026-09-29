@@ -4,14 +4,14 @@ End-to-end walkthrough from a fresh clone to a fully working dev environment, re
 
 ## 0. Pré-requis
 
-- [ ] Node 20+ (`node -v`)
+- [ ] Node **22.19+ ou 24.11+** (`node -v`) — exigé par Nuxt 4.5. Avec nvm : `nvm install && nvm use` (lit `.nvmrc`)
 - [ ] pnpm ≥ 9 (`pnpm -v`) **ou** npm ≥ 10
 - [ ] Compte npm créé et connecté localement (`pnpm login` / `npm login`)
 - [ ] Compte GitHub avec un repo créé pour ce projet
 
 ## 1. Remplacer le placeholder de scope (à faire **avant** d'installer)
 
-Le repo utilise `paullefizelier` partout comme sentinelle. Tant qu'il n'est pas remplacé, `pnpm install` ne sait pas que `@paullefizelier/wp-to-strapi-core` vit dans `packages/core` et tente de le télécharger depuis npm → **404**.
+Le repo utilise le scope `paullefizelier`. Pour publier sous un autre scope npm, remplace-le partout. Inutile pour travailler en local : les paquets internes sont reliés depuis le dépôt quel que soit leur nom.
 
 Depuis la racine du repo, choisis ton scope npm puis exécute :
 
@@ -154,7 +154,13 @@ Pour avoir une fiche officielle Strapi Market avec badge, il faut ouvrir un PR s
 
 | Symptôme | Cause | Fix |
 |----------|-------|-----|
-| `ERR_PNPM_FETCH_404 @paullefizelier/...` | Placeholder pas remplacé | Refaire le `sed` de l'étape 1 |
+| `ERR_PNPM_FETCH_404 @paullefizelier/...` | pnpm cherche un paquet interne sur le registre npm au lieu de le prendre dans le dépôt (`linkWorkspacePackages` absent de `pnpm-workspace.yaml`) | `git pull` pour récupérer le `pnpm-workspace.yaml` à jour, puis `rm -rf node_modules */*/node_modules && pnpm install` |
+| `ERR_PNPM_IGNORED_BUILDS` (pnpm 10/11) | pnpm n'exécute pas les scripts d'installation non autorisés | Liste `allowBuilds` de `pnpm-workspace.yaml` (déjà remplie pour esbuild, @swc/core, vue-demi) |
+| `npm warn EBADENGINE … nuxt@4.5.2 … required: { node: '^22.19.0 …' }` | Node trop ancien | `nvm install && nvm use` (Node 24), ou mettre Node à jour |
+| `npm error ENOTEMPTY: directory not empty, rename …` | `npm i` lancé sur un `node_modules` créé par pnpm (ou une install interrompue) | `rm -rf node_modules apps/*/node_modules packages/*/node_modules` puis `npm ci` |
+| `TS7016: Could not find a declaration file for module 'undici'` | Installation incomplète (voir ligne précédente) | Même fix : tout supprimer puis `npm ci` |
+| `Cannot find native binding` / `Cannot find module '@rolldown/binding-darwin-arm64'` | Lockfile régénéré sur une autre plateforme sans les variantes natives de la tienne (bug npm/cli#4828) | `git pull` (lockfile corrigé), puis tout supprimer et `npm ci`. Si tu régénères le lockfile : `rm -rf node_modules */*/node_modules package-lock.json && npm install`, puis `node scripts/check-lockfile.mjs` |
+| `sh: tsc: command not found` | L'installation a échoué avant la fin : les dépendances ne sont pas là | Corriger l'erreur d'installation, puis relancer `npm ci` (ou `pnpm install`) |
 | `ERR_PNPM_NO_MATCHING_VERSION` sur un package interne | `pnpm-workspace.yaml` absent ou mal configuré | Vérifier qu'il existe à la racine |
 | `npm error 402 Payment Required` au publish | Scoped package en privé par défaut | Vérifier `publishConfig.access: "public"` dans le `package.json` concerné |
 | `npm error 403 Forbidden` au publish | Mauvais token ou 2FA "auth and writes" | Régénérer un token *Automation*, mettre 2FA en *auth only* |

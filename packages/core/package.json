@@ -1,7 +1,7 @@
 {
   "name": "@paullefizelier/wp-to-strapi-core",
   "version": "0.1.0",
-  "description": "WordPress → Strapi v5 migration core (clients, orchestrator, events)",
+  "description": "WordPress \u2192 Strapi v5 migration core (clients, orchestrator, events)",
   "license": "MIT",
   "author": "",
   "repository": {
@@ -13,7 +13,12 @@
     "url": "https://github.com/paullefizelier/wp-to-strapi/issues"
   },
   "homepage": "https://github.com/paullefizelier/wp-to-strapi/tree/main/packages/core#readme",
-  "keywords": ["wordpress", "strapi", "migration", "typescript"],
+  "keywords": [
+    "wordpress",
+    "strapi",
+    "migration",
+    "typescript"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -21,9 +26,17 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./mapping": {
+      "types": "./dist/mapping-entry.d.ts",
+      "import": "./dist/mapping-entry.js"
     }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "publishConfig": {
     "access": "public"
   },
@@ -31,15 +44,24 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "npm run clean && npm run build",
+    "test": "vitest run && npm run test:esm",
+    "test:watch": "vitest",
+    "test:esm": "node scripts/esm-smoke.mjs"
   },
   "dependencies": {
+    "he": "^1.2.0",
+    "node-html-parser": "^6.1.13",
     "p-limit": "^5.0.0",
     "undici": "^6.19.8"
   },
   "devDependencies": {
+    "@types/he": "^1.2.3",
     "@types/node": "^20.14.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

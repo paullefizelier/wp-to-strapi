@@ -14,11 +14,15 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Lockfile works on every platform
+        run: node scripts/check-lockfile.mjs
       - run: npm ci
       - name: Build core
         run: npm run -w @paullefizelier/wp-to-strapi-core build
       - name: Typecheck core
         run: npm run -w @paullefizelier/wp-to-strapi-core typecheck
+      - name: Test core
+        run: npm run -w @paullefizelier/wp-to-strapi-core test
       - name: Build strapi-adapter
         run: npm run -w @paullefizelier/wp-to-strapi-adapter build
       - name: Typecheck strapi-adapter

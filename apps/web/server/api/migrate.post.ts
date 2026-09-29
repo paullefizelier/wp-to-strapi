@@ -21,7 +21,10 @@ export default defineEventHandler(async (event) => {
     try {
       const migrator = new Migrator(cfg);
       migrator.on("event", (e) => recordEvent(run, e));
-      await migrator.run({ only: parsed.data.only });
+      await migrator.run({
+        only: parsed.data.only,
+        retryFailed: parsed.data.retryFailed,
+      });
       completeRun(run);
     } catch (err) {
       completeRun(run, err as Error);
